@@ -1,0 +1,10 @@
+# Core agent loop
+httpx>=0.27           # async HTTP for OpenAI-compatible backends
+
+# Skill loader (next session)
+pyyaml>=6.0           # SKILL.md frontmatter
+pydantic>=2.0         # typed tool-input validation
+
+# Dev / testing
+pytest>=8.0
+pytest-asyncio>=0.23

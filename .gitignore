@@ -1,0 +1,58 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+env/
+.eggs/
+*.egg-info/
+*.egg
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# --- Secrets / config ---
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+config.local.toml
+
+# --- Faust runtime artifacts ---
+captures/
+*.pcap
+*.pcapng
+*.cap
+*.iq
+*.cu8
+*.cs8
+
+journal.db
+journal.db-*
+*.journal
+
+models/
+*.gguf
+*.hef
+*.rkllm
+
+.hailo_cache/
+.rkllm_cache/
+
+# --- Testing / build ---
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+
+# --- Claude Code internal state ---
+.claude/
