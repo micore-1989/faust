@@ -47,6 +47,7 @@ from .events import (
     ToolCallProposed,
     Final,
 )
+from ..skills.scoper import SkillScoper
 
 
 DEFAULT_SYSTEM_PROMPT = """You are faust, an AI-native pentesting handheld.
@@ -72,11 +73,15 @@ class AgentLoop:
         dispatcher: Dispatcher,
         config: AgentConfig,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
+        scoper: SkillScoper | None = None,
+        scoper_k: int = 8,
     ) -> None:
         self.backend = backend
         self.dispatcher = dispatcher
         self.config = config
         self.system_prompt = system_prompt
+        self.scoper = scoper
+        self.scoper_k = scoper_k
 
     async def run(self, user_input: str) -> AsyncIterator[Event]:
         """Run the loop to completion. Yields events as they occur.
@@ -92,7 +97,20 @@ class AgentLoop:
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": user_input},
         ]
-        tool_schemas = self.dispatcher.registry.to_openai_schemas()
+
+        # Scope tool_schemas down to the top-K most relevant skills for this
+        # prompt. Keeps the tool-schema section of context manageable on
+        # tight-window backends (Hailo 2048 tok). The registry still holds
+        # every tool — dispatch is not restricted, only what the model sees.
+        if self.scoper is not None:
+            relevant = set(await self.scoper.top_k(user_input, k=self.scoper_k))
+            tool_schemas = [
+                t.to_openai_schema()
+                for t in self.dispatcher.registry.all()
+                if t.name in relevant
+            ]
+        else:
+            tool_schemas = self.dispatcher.registry.to_openai_schemas()
 
         for iteration in range(self.config.max_iterations):
             # --- 1. Call the model ---

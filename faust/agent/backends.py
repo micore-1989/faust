@@ -164,14 +164,66 @@ class ClaudeBackend(LLMBackend):
         )
 
 
+def make_deep_backend(config: "AgentConfig") -> LLMBackend | None:  # type: ignore[name-defined]
+    """Factory for the planning (deep) backend. Returns None if disabled.
+
+    The deep backend is used for Pass 1 (planning) in TwoPassAgent. It runs
+    a larger model (Qwen 2.5 7B int4 on Mephisto's Pi 5 CPU via llama.cpp,
+    or local Ollama with 7B in dev) that reasons better about complex plans.
+
+    Falls back to the main backend at runtime if unreachable.
+    """
+    from .config import (  # local import to avoid cycles
+        AgentConfig,
+        MEPHISTO_ENDPOINT,
+        MEPHISTO_PLANNING_ENDPOINT,
+    )
+
+    assert isinstance(config, AgentConfig)
+    if not config.planning_enabled:
+        return None
+
+    endpoint = config.effective_planning_endpoint()
+    # When mephisto backend + no explicit planning_endpoint, use the default
+    # llama.cpp port on Mephisto.
+    if (
+        config.backend == "mephisto"
+        and not config.planning_endpoint
+        and endpoint in (MEPHISTO_ENDPOINT, "http://localhost:11434/v1")
+    ):
+        endpoint = MEPHISTO_PLANNING_ENDPOINT
+
+    return OllamaBackend(
+        endpoint=endpoint,
+        model=config.planning_model,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+        timeout_s=config.planning_timeout_s,
+    )
+
+
 def make_backend(config: "AgentConfig") -> LLMBackend:  # type: ignore[name-defined]
     """Factory dispatching on config.backend."""
-    from .config import AgentConfig  # local import to avoid cycles
+    from .config import AgentConfig, MEPHISTO_ENDPOINT  # local import to avoid cycles
 
     assert isinstance(config, AgentConfig)
     if config.backend == "ollama":
         return OllamaBackend(
             endpoint=config.llm_endpoint,
+            model=config.model,
+            temperature=config.temperature,
+            max_tokens=config.max_tokens,
+            timeout_s=config.request_timeout_s,
+        )
+    if config.backend == "mephisto":
+        # Same protocol as Ollama — hailo-ollama is OpenAI-compatible.
+        # Use explicit endpoint if set, otherwise default to USB-ethernet link.
+        endpoint = config.llm_endpoint
+        if endpoint == "http://localhost:11434/v1":
+            # User didn't override — use Mephisto's default.
+            endpoint = MEPHISTO_ENDPOINT
+        return OllamaBackend(
+            endpoint=endpoint,
             model=config.model,
             temperature=config.temperature,
             max_tokens=config.max_tokens,

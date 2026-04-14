@@ -1,0 +1,6 @@
+# ─── Mac / Linux development dependencies ──────────────────────────
+# For running the full stack locally (both models via Ollama, scoper
+# locally). Faust deployment uses requirements.txt only — nothing here.
+
+-r requirements.txt
+-r requirements-mephisto.txt

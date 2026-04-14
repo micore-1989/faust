@@ -47,6 +47,10 @@ models/
 .hailo_cache/
 .rkllm_cache/
 
+# Embedding caches (regenerated on first run of the scoper)
+skills/.embeddings.npz
+*.embeddings.npz
+
 # --- Testing / build ---
 .pytest_cache/
 .coverage
@@ -56,3 +60,4 @@ build/
 
 # --- Claude Code internal state ---
 .claude/
+.dev-sim/

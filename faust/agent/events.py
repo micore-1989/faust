@@ -11,6 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Union
 
+from .plan import Plan
+
 
 @dataclass
 class Thinking:
@@ -43,6 +45,30 @@ class ToolCallExecuted:
 
 
 @dataclass
+class PlanProposed:
+    """Planner has produced an execution plan. Emitted BEFORE any tool call
+    so the UI can surface the whole plan for user approval."""
+    type: Literal["plan_proposed"] = "plan_proposed"
+    plan_id: str = ""
+    reasoning: str = ""
+    steps: list[dict[str, Any]] = field(default_factory=list)
+    safety_notes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_plan(cls, plan: Plan, plan_id: str = "") -> "PlanProposed":
+        return cls(
+            plan_id=plan_id,
+            reasoning=plan.reasoning,
+            steps=[{
+                "skill": s.skill,
+                "intent": s.intent,
+                "critical": s.critical,
+            } for s in plan.steps],
+            safety_notes=list(plan.safety_notes),
+        )
+
+
+@dataclass
 class Final:
     """Loop terminated. Reason is one of: end_turn (model done), max_iterations,
     user_abort (disclosure layer rejected a call), error (backend crashed)."""
@@ -52,4 +78,4 @@ class Final:
     error: str | None = None
 
 
-Event = Union[Thinking, ToolCallProposed, ToolCallExecuted, Final]
+Event = Union[Thinking, PlanProposed, ToolCallProposed, ToolCallExecuted, Final]

@@ -1,0 +1,12 @@
+# ─── Mephisto-only dependencies ────────────────────────────────────
+# Installed on Mephisto (Pi 5 16GB) for hosting the embedding scoper and
+# running local Ollama (dev) or llama.cpp (prod). Faust does NOT need
+# these — it talks to Mephisto over HTTP via RemoteEmbeddingScoper.
+
+-r requirements.txt
+
+# Skill scoper — sentence-transformers runs behind deploy/mephisto/scoper_server.py
+# torch is ~200MB resident; MiniLM-L6-v2 weights ~80MB. Total ~400MB which
+# is fine on Mephisto's 16GB but would be catastrophic on Faust's 1GB.
+sentence-transformers>=2.7
+numpy>=1.26
