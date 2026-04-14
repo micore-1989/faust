@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1280, height=800, initial-scale=1, user-scalable=no">
+    <title>𝑓aust</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="shell">
+        <!-- Zone 1: Status bar -->
+        <header id="status-bar">
+            <span class="brand">𝑓aust</span>
+            <div class="status-group">
+                <div class="status-indicator" id="link-status">
+                    <span class="status-dot" id="link-dot"></span>
+                    <span id="link-label">offline</span>
+                </div>
+                <div class="status-indicator" id="model-status">
+                    <span id="model-label">—</span>
+                </div>
+                <div class="status-indicator" id="loop-status">
+                    <span id="loop-label">idle</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Zone 2: Main content -->
+        <div id="main-content">
+            <!-- Category nav sidebar -->
+            <nav id="category-nav">
+                <button class="category-btn active" data-category="all" title="All">
+                    <span>⊛</span>
+                    <span class="label">All</span>
+                </button>
+                <button class="category-btn" data-category="wifi" title="WiFi">
+                    <span>◉</span>
+                    <span class="label">WiFi</span>
+                </button>
+                <button class="category-btn" data-category="ble" title="BLE">
+                    <span>◎</span>
+                    <span class="label">BLE</span>
+                </button>
+                <button class="category-btn" data-category="nfc" title="NFC / RFID">
+                    <span>▣</span>
+                    <span class="label">NFC</span>
+                </button>
+                <button class="category-btn" data-category="rf" title="Sub-GHz / SDR">
+                    <span>≋</span>
+                    <span class="label">RF</span>
+                </button>
+                <button class="category-btn" data-category="ir" title="Infrared">
+                    <span>◈</span>
+                    <span class="label">IR</span>
+                </button>
+                <button class="category-btn" data-category="usb" title="USB / HID">
+                    <span>⌨</span>
+                    <span class="label">USB</span>
+                </button>
+                <button class="category-btn" data-category="network" title="Network">
+                    <span>⇌</span>
+                    <span class="label">Net</span>
+                </button>
+                <button class="category-btn" data-category="analysis" title="Offline analysis">
+                    <span>⊜</span>
+                    <span class="label">Anlz</span>
+                </button>
+                <button class="category-btn" data-category="defense" title="Defense / counter-surveillance">
+                    <span>⊘</span>
+                    <span class="label">Defn</span>
+                </button>
+            </nav>
+
+            <!-- Event stream / conversation -->
+            <div id="event-stream">
+                <div class="event-card event-thinking" style="color: var(--text-dim);">
+                    ready.
+                </div>
+            </div>
+        </div>
+
+        <!-- Confirmation overlay (appears over event stream) -->
+        <div id="confirmation-overlay">
+            <div class="confirm-title" id="confirm-title"></div>
+            <div class="confirm-details" id="confirm-details"></div>
+            <div class="confirm-actions">
+                <button class="btn btn-reject" id="confirm-reject">Reject</button>
+                <button class="btn btn-approve" id="confirm-approve">Approve</button>
+            </div>
+        </div>
+
+        <!-- Zone 3: Input / nav bar -->
+        <footer id="nav-bar">
+            <input type="text" id="prompt-input" placeholder="ask faust..."
+                   autocomplete="off" autocorrect="off" spellcheck="false">
+            <button id="send-btn" title="Send">▶</button>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

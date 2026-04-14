@@ -324,6 +324,17 @@ Voltage regulator that doesn't reliably appear on Amazon.
 
 ---
 
+## Known gaps / add-on items (not in current orders)
+
+These were identified in post-order codebase audits. All are low-cost and
+readily sourced locally:
+
+| Item | Why needed | Approx. cost |
+|------|-----------|--------------|
+| USB-C to USB-A adapter (male-female) | HackRF Pro (USB-C) into Faust's Pi 5 USB-A ports — Pi 5's only USB-C is used for the Mephisto dock | $3-5 |
+
+---
+
 ## Explicit Scope Boundaries (NOT in MK1)
 
 These are intentional omissions for MK1 — possible additions in MK2:
