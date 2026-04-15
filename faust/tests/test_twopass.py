@@ -247,26 +247,34 @@ async def test_empty_plan_ends_cleanly():
 
 
 async def test_missing_skill_in_plan_errors():
-    """If the planner references a skill that isn't in the registry, fail loudly."""
+    """If the planner references a skill that isn't in the registry, retry
+    once; if the retry also produces a bad skill, execute the valid parts
+    and fail loudly at the bad step."""
     registry = _mk_registry([("wifi_scan", "Scan WiFi")])
+    bad_plan = _plan_response("scan + hallucinated", [
+        {"skill": "wifi_scan", "intent": "real scan"},
+        {"skill": "hallucinated_tool", "intent": "doesn't exist"},
+    ])
     backend = MockBackend([
-        _plan_response("scan + hallucinated", [
-            {"skill": "wifi_scan", "intent": "real scan"},
-            {"skill": "hallucinated_tool", "intent": "doesn't exist"},
-        ]),
-        _tool_response("wifi_scan", {}),
-        # Never reached for hallucinated_tool.
+        bad_plan,                          # initial plan
+        bad_plan,                          # retry — same bad plan (stubborn model)
+        _tool_response("wifi_scan", {}),   # parameterize wifi_scan
+        # hallucinated_tool parameterize is never reached — fails at dispatch.
     ])
     agent = TwoPassAgent(backend, Dispatcher(registry), AgentConfig())
     events = await collect(agent, "anything")
 
-    # Should see the first step execute, then error on the second.
+    # First step executes (it's valid), then the bad step errors.
     types = [type(e).__name__ for e in events]
     assert "ToolCallExecuted" in types
     final = events[-1]
     assert final.reason == "error"
     assert "hallucinated_tool" in (final.error or "")
-    print("✓ plan referencing unknown skill errors cleanly")
+
+    # PlanProposed should carry the retry-failure safety note.
+    plan_event = next(e for e in events if type(e).__name__ == "PlanProposed")
+    assert any("unknown skills after retry" in n for n in plan_event.safety_notes)
+    print("✓ plan referencing unknown skill: retries once, then errors cleanly")
 
 
 async def test_planner_non_tool_response_returns_empty_plan():

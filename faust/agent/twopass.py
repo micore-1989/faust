@@ -97,8 +97,18 @@ class TwoPassAgent:
         self.plan_approver = plan_approver or _auto_approve_plan
         self.planner = Planner(backend, deep_backend=deep_backend)
 
-    async def run(self, user_input: str) -> AsyncIterator[Event]:
-        """Run plan → approve → execute pipeline. Yields events."""
+    async def run(
+        self,
+        user_input: str,
+        conversation_history: list[dict[str, Any]] | None = None,
+    ) -> AsyncIterator[Event]:
+        """Run plan → approve → execute pipeline. Yields events.
+
+        `conversation_history` carries forward prior turns as OpenAI-style
+        messages (user + assistant pairs). The planner sees it so follow-up
+        prompts like "attack the one we found" reference earlier results.
+        Capped to config.conversation_memory_turns to protect token budget.
+        """
         # ── Pass 1: build catalog, plan ─────────────────────────────
         allowed_names: list[str] | None = None
         if self.scoper is not None:
@@ -109,8 +119,10 @@ class TwoPassAgent:
             yield Final(reason="error", error="no skills available")
             return
 
+        history = self._trim_history(conversation_history)
+
         try:
-            plan = await self.planner.plan(user_input, catalog)
+            plan = await self.planner.plan(user_input, catalog, history=history)
         except Exception as e:
             yield Final(reason="error", error=f"planner failed: {type(e).__name__}: {e}")
             return
@@ -119,7 +131,6 @@ class TwoPassAgent:
         yield PlanProposed.from_plan(plan, plan_id=plan_id)
 
         if not plan.steps:
-            # Planner decided no skills apply or returned empty plan.
             yield Final(
                 reason="end_turn",
                 text=plan.reasoning or "No applicable skills for this request.",
@@ -138,12 +149,20 @@ class TwoPassAgent:
 
         # ── Pass 2: execute each step ───────────────────────────────
         step_results: list[dict[str, Any]] = []
+        replans_used = 0
+        # Worklist of steps remaining — can be rewritten by a re-plan.
+        remaining: list[PlanStep] = list(plan.steps)
+        step_idx = 0
 
-        for idx, step in enumerate(plan.steps):
+        while remaining:
+            step = remaining.pop(0)
+            call_id = f"{plan_id}-step{step_idx}"
+            step_idx += 1
+
             tool = self.dispatcher.registry.get(step.skill)
             if tool is None:
                 yield ToolCallExecuted(
-                    call_id=f"{plan_id}-step{idx}",
+                    call_id=call_id,
                     tool_name=step.skill,
                     error=f"unknown skill in plan: {step.skill}",
                 )
@@ -153,7 +172,6 @@ class TwoPassAgent:
                 )
                 return
 
-            # Per-step LLM call: ONE tool schema + intent + history.
             try:
                 tool_call = await self._parameterize_step(
                     user_input=user_input,
@@ -169,7 +187,6 @@ class TwoPassAgent:
                 )
                 return
 
-            call_id = f"{plan_id}-step{idx}"
             yield ToolCallProposed(
                 call_id=call_id,
                 tool_name=step.skill,
@@ -188,7 +205,6 @@ class TwoPassAgent:
                 result=result,
             )
 
-            # Record for next step's context.
             step_results.append({
                 "skill": step.skill,
                 "intent": step.intent,
@@ -201,7 +217,93 @@ class TwoPassAgent:
                 yield Final(reason="user_abort")
                 return
 
+            # ── Re-plan on surprise ────────────────────────────────
+            # Step errored (but wasn't user-rejected). Invoke planner with
+            # current state. If planner produces different remaining steps,
+            # swap them in. Guard against infinite loops via replan_max.
+            if (
+                result.error is not None
+                and self.config.replan_enabled
+                and replans_used < self.config.replan_max
+                and remaining  # only worth re-planning if there's still work
+            ):
+                replans_used += 1
+                replan_prompt = (
+                    f"ORIGINAL REQUEST: {user_input}\n\n"
+                    f"The plan encountered an error at step `{step.skill}`: "
+                    f"{result.error}\n\n"
+                    f"Steps completed so far: "
+                    f"{[r['skill'] for r in step_results]}\n\n"
+                    f"Remaining steps that were planned: "
+                    f"{[s.skill for s in remaining]}\n\n"
+                    f"Given what you now know, revise the plan. Return only the "
+                    f"REMAINING steps to accomplish the original request — do "
+                    f"not repeat completed steps. If the request is no longer "
+                    f"achievable, return an empty plan explaining why."
+                )
+                try:
+                    new_plan = await self.planner.plan(
+                        replan_prompt, catalog, history=history,
+                    )
+                except Exception:
+                    # Re-plan failed — fall through to original remaining steps.
+                    continue
+
+                # Yield a new PlanProposed so the UI surfaces the revision.
+                new_plan_id = f"{plan_id}-replan{replans_used}"
+                yield PlanProposed.from_plan(new_plan, plan_id=new_plan_id)
+
+                # Approve the revised plan with the same approver.
+                if new_plan.steps:
+                    approval = self.plan_approver(new_plan)
+                    if hasattr(approval, "__await__"):
+                        approved = await approval  # type: ignore[misc]
+                    else:
+                        approved = approval
+                    if not approved:
+                        yield Final(reason="user_abort", text="revised plan rejected")
+                        return
+
+                # Swap remaining with new plan's steps.
+                remaining = list(new_plan.steps)
+
         yield Final(reason="end_turn")
+
+    def _trim_history(
+        self,
+        history: list[dict[str, Any]] | None,
+    ) -> list[dict[str, Any]] | None:
+        """Cap history by turns AND by character budget.
+
+        One turn = one {user, assistant} pair. We keep at most
+        config.conversation_memory_turns pairs, and within that truncate
+        each message so total content stays under config.conversation_memory_chars.
+        """
+        if not history or not self.config.conversation_memory:
+            return None
+
+        max_turns = max(0, self.config.conversation_memory_turns)
+        # A turn is 2 messages (user + assistant).
+        keep = history[-(max_turns * 2):] if max_turns > 0 else []
+        if not keep:
+            return None
+
+        # Hard cap on total chars.
+        budget = self.config.conversation_memory_chars
+        # Truncate from the most recent backward so recent context survives.
+        trimmed: list[dict[str, Any]] = []
+        used = 0
+        for msg in reversed(keep):
+            c = str(msg.get("content", ""))
+            remaining = budget - used
+            if remaining <= 0:
+                break
+            if len(c) > remaining:
+                c = c[: remaining - 3] + "..."
+            trimmed.insert(0, {"role": msg.get("role", "user"), "content": c})
+            used += len(c)
+
+        return trimmed or None
 
     async def _parameterize_step(
         self,

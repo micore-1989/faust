@@ -136,53 +136,91 @@ class Planner:
     ) -> Plan:
         """Run Pass 1 — returns the structured Plan.
 
-        Tries the deep backend first (if configured). On timeout/connection
-        error, falls back to the main backend with a safety_note appended
-        so the user knows they got the less-capable planner.
+        Deep backend first (if configured), falls back to main on failure.
+        After getting a plan, validates skill names against the catalog
+        and retries ONCE with an error hint if any are hallucinated.
         """
         catalog_text = render_catalog(catalog)
+        catalog_names = {e.name for e in catalog}
 
         system = PLANNER_SYSTEM_PROMPT + "\n\n" + catalog_text
 
-        messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        base_messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         if history:
-            messages.extend(history)
-        messages.append({"role": "user", "content": user_input})
+            base_messages.extend(history)
+        base_messages.append({"role": "user", "content": user_input})
 
-        # Try the deep backend first if available.
+        plan, fallback_note = await self._call_planner(base_messages)
+
+        # Validate skill names; retry once if any are hallucinated.
+        invalid = [s.skill for s in plan.steps if s.skill not in catalog_names]
+        if invalid and plan.steps:
+            hint = _hallucination_hint(invalid, catalog_names)
+            retry_messages = list(base_messages) + [
+                {"role": "user", "content": hint},
+            ]
+            try:
+                retry_plan, _ = await self._call_planner(retry_messages)
+                retry_invalid = [
+                    s.skill for s in retry_plan.steps if s.skill not in catalog_names
+                ]
+                if not retry_invalid:
+                    plan = retry_plan
+                else:
+                    # Model still hallucinated. Surface via safety note but
+                    # use the retry plan (often more structured).
+                    plan = retry_plan
+                    plan.safety_notes.insert(
+                        0,
+                        f"planner referenced unknown skills after retry: "
+                        f"{sorted(set(retry_invalid))}",
+                    )
+            except Exception as e:
+                # Retry failed entirely (network glitch, backend exhausted, etc.)
+                # Keep the original plan but warn the user about the bad skills.
+                plan.safety_notes.insert(
+                    0,
+                    f"planner references unknown skills {sorted(set(invalid))}; "
+                    f"retry failed ({type(e).__name__}) — plan may fail at execution",
+                )
+
+        if fallback_note:
+            plan.safety_notes.insert(0, fallback_note)
+        return plan
+
+    async def _call_planner(
+        self, messages: list[dict[str, Any]]
+    ) -> tuple[Plan, str | None]:
+        """Single planner invocation. Tries deep backend, falls back to fast.
+
+        Returns (plan, fallback_note) — fallback_note is non-None when the
+        deep backend failed and we used fast instead.
+        """
         fallback_note: str | None = None
-        backend_to_use = self.backend
         if self.deep_backend is not None:
             try:
                 msg = await self.deep_backend.complete(
                     messages=messages,
                     tools=[SUBMIT_PLAN_TOOL],
                 )
-                return self._extract_plan(msg)
+                return self._extract_plan(msg), None
             except Exception as e:
                 fallback_note = (
                     f"deep planner unavailable ({type(e).__name__}); "
                     f"used fast planner — plan may be less thorough"
                 )
 
-        msg = await backend_to_use.complete(
+        msg = await self.backend.complete(
             messages=messages,
             tools=[SUBMIT_PLAN_TOOL],
         )
-        plan = self._extract_plan(msg)
-        if fallback_note:
-            plan.safety_notes.insert(0, fallback_note)
-        return plan
+        return self._extract_plan(msg), fallback_note
 
     def _extract_plan(self, msg: Any) -> Plan:
         """Parse a submit_plan tool-call into a Plan. Handles malformed output."""
-
-        # The model should have called submit_plan. If it didn't, fall back
-        # to an empty plan with the model's text as reasoning.
         for tc in msg.tool_calls:
             if tc.name == "submit_plan":
                 args = tc.arguments
-                # Coerce strings into the dataclass structure.
                 try:
                     return Plan.from_dict(args)
                 except Exception as e:
@@ -197,3 +235,18 @@ class Planner:
             steps=[],
             safety_notes=[],
         )
+
+
+def _hallucination_hint(invalid: list[str], catalog_names: set[str]) -> str:
+    """Build a retry hint telling the model what it got wrong."""
+    bad = sorted(set(invalid))
+    valid = sorted(catalog_names)
+    return (
+        f"Your previous plan referenced skills that do not exist: {bad}. "
+        f"Valid skills (use EXACTLY these names, no others): {valid}. "
+        f"Some common mistakes:\n"
+        f"  - 'nfc_clone' is not a skill — for 13.56 MHz tags, use nfc_read + nfc_write; "
+        f"for 125 kHz LF cards, use rfid_clone.\n"
+        f"  - 'wifi_crack' is not a skill — use wpa_crack against a captured handshake.\n"
+        f"Revise your submit_plan call using only skills from the catalog."
+    )

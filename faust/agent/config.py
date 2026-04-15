@@ -62,6 +62,20 @@ class AgentConfig:
     # plan-then-execute — preferred for Mephisto+Faust split).
     mode: str = "twopass"
 
+    # Re-plan on surprise: when a step errors mid-execution, invoke the
+    # planner again with current state. Max 1 re-plan per run by default
+    # (prevents infinite loops). Disable if tight on latency.
+    replan_enabled: bool = True
+    replan_max: int = 1
+
+    # Cross-turn conversation memory (Pass 1 planner only).
+    # Lets follow-up prompts reference earlier results.
+    # Bounded by turns + char budget to protect the 2048-token Hailo window
+    # in case of deep-planner fallback.
+    conversation_memory: bool = True
+    conversation_memory_turns: int = 1  # last N {user,assistant} pairs
+    conversation_memory_chars: int = 2000  # hard cap across all history
+
     @classmethod
     def from_env(cls) -> "AgentConfig":
         return cls(
@@ -77,6 +91,11 @@ class AgentConfig:
             scoper_k=int(os.environ.get("FAUST_SCOPER_K", cls.scoper_k)),
             scoper_endpoint=os.environ.get("FAUST_SCOPER_ENDPOINT", cls.scoper_endpoint),
             mode=os.environ.get("FAUST_MODE", cls.mode),
+            replan_enabled=_envbool("FAUST_REPLAN_ENABLED", cls.replan_enabled),
+            replan_max=int(os.environ.get("FAUST_REPLAN_MAX", cls.replan_max)),
+            conversation_memory=_envbool("FAUST_CONVERSATION_MEMORY", cls.conversation_memory),
+            conversation_memory_turns=int(os.environ.get("FAUST_CONVERSATION_MEMORY_TURNS", cls.conversation_memory_turns)),
+            conversation_memory_chars=int(os.environ.get("FAUST_CONVERSATION_MEMORY_CHARS", cls.conversation_memory_chars)),
         )
 
     def effective_planning_endpoint(self) -> str:
