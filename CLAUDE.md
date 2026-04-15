@@ -18,6 +18,19 @@ This file is read automatically by Claude Code at the start of each session. It 
 6. **Two-pass by default.** Mephisto plans with a lean catalog (Pass 1), then parameterizes one skill at a time (Pass 2). Mephisto NEVER sees all tool schemas at once. This is architectural — it's how the 2048-token Hailo window handles 40+ skills. See `faust/agent/twopass.py`.
 7. **Scoper filters before catalog.** For registries larger than ~20 skills, the embedding scoper (`faust/skills/scoper.py`) filters the catalog to top-K by relevance. Fallback to `NoopScoper` is acceptable but degrades planning quality past 30 skills.
 8. **Dual-model cascade.** Pass 1 uses a deep backend (Qwen 2.5 **7B** on Pi 5 CPU via llama.cpp, port 8081). Pass 2 uses the fast backend (Qwen 2.5 **1.5B** on Hailo NPU, port 8000). Planning falls back to fast on deep-backend failure with a safety note. Configure via `FAUST_PLANNING_*` env vars.
+9. **Hallucination-retry on planning.** Planner validates skill names against the catalog; if hallucinated (e.g. `nfc_clone` instead of `rfid_clone`), retries ONCE with an error hint listing valid alternatives. If retry also fails, surfaces a `safety_note` and proceeds with the bad plan (will error at dispatch).
+10. **Re-plan on surprise.** When a step errors mid-execution (not user-rejected), the planner is invoked again with current state and replaces remaining steps. Capped at `replan_max=1` per turn to prevent loops. Results in a second `PlanProposed` event the operator must approve.
+11. **Cross-turn memory is bounded.** Conversation history (Pass 1 only) is capped at `conversation_memory_turns=1` and `conversation_memory_chars=2000` by default — chosen so Pass 1 never exceeds Hailo's 2048-token window even on degraded fast-only fallback.
+
+## Config defaults — chosen for token budget reasons
+
+| Knob | Default | Why |
+|------|---------|-----|
+| `scoper_k` | 12 | Catalog of top-12 fits ~1000 tokens; with system + prompt + submit_plan tool stays under 2048 |
+| `replan_max` | 1 | One re-plan per turn protects against runaway loops while letting the agent recover from a surprise |
+| `conversation_memory_turns` | 1 | Last user+assistant pair only; older turns drop |
+| `conversation_memory_chars` | 2000 | Hard cap on combined history content |
+| `planning_timeout_s` | 120 | Qwen 7B on Pi 5 CPU takes ~60s per plan; 120s gives headroom |
 
 ## Architecture decisions already made (chunk references in `docs/`)
 
@@ -32,8 +45,8 @@ This file is read automatically by Claude Code at the start of each session. It 
 
 `faust/` package:
 - `agent/loop.py` — Ring 4 async loop (legacy single-pass mode)
-- `agent/twopass.py` — TwoPassAgent: plan (Mephisto, catalog) → approve → per-step parameterize + dispatch (Faust). **Default mode.**
-- `agent/planner.py` — Pass 1 logic with `submit_plan` meta-tool
+- `agent/twopass.py` — TwoPassAgent: plan → approve → per-step parameterize + dispatch. Includes re-plan on surprise + cross-turn conversation memory. **Default mode.**
+- `agent/planner.py` — Pass 1 logic with `submit_plan` meta-tool. Dual-backend cascade (deep → fast fallback) + hallucination-retry.
 - `agent/catalog.py` — builds lean skill catalog from the registry
 - `agent/plan.py` — Plan/PlanStep dataclasses
 - `agent/backends.py` — `LLMBackend` ABC + `OllamaBackend` + stub `ClaudeBackend`
@@ -43,16 +56,32 @@ This file is read automatically by Claude Code at the start of each session. It 
 - `agent/events.py` — `Thinking` / `PlanProposed` / `ToolCallProposed` / `ToolCallExecuted` / `Final`
 - `agent/config.py` — single source of backend/endpoint/model/mode truth
 - `skills/loader.py` — SKILL.md parser + registry populator (pydantic-validated)
-- `skills/scoper.py` — embedding-based skill retrieval (sentence-transformers)
+- `skills/scoper.py` — embedding-based skill retrieval. `LocalEmbeddingScoper` (sentence-transformers + MiniLM) for Mephisto/dev, `RemoteEmbeddingScoper` (HTTP to Mephisto) for Faust to keep its 1GB Pi lean, `NoopScoper` fallback. **All `top_k` calls are async.**
+- `skills/fakes.py` — shared synthetic-data helpers used by every skill's `tool.py` until real hardware arrives. `mark_synthetic()` flags every result with `_synthetic: true`.
 - `tools/registry.py` — in-memory tool registry, exports OpenAI tool schemas
 - `transport/link.py` — Faust↔Mephisto USB-ethernet health checking
-- `ui/server.py` + `ui/static/*` — aiohttp three-zone touchscreen UI
-- `ui/run.py` — live agent runner with WebSocket event stream
+- `ui/state.py` — `SimulatorState` (power/mephisto state machine) + canned boot log used by the simulator
+- `ui/server.py` — aiohttp + WebSocket. Authoritative state for power-on, mephisto-connect, and skill dispatch from the UI
+- `ui/run.py` — wires the agent into the server's prompt/dispatch handlers; cross-turn memory lives here
+- `ui/static/*` — Apple-esque single-screen-at-a-time UI: splash (off → boot animation → home), home (app grid + Ask 𝑓aust tile), category, skill (parameter form + Run + result), chat
 - `cli.py` — terminal runner with stdin confirmation
-- `skills/*/SKILL.md` — 41 SKILL.md files across recon/attack/defense
-- `deploy/mephisto/setup-gadget.sh` + `deploy/faust/setup-usb-host.sh` — Pi provisioning
+- `skills/*/SKILL.md` + `skills/*/tool.py` — 41 SKILL.md drafts; every skill has a `tool.py` (fake synthetic data today, real hardware drivers as parts arrive)
+- `deploy/mephisto/setup-gadget.sh` + `setup-planning.sh` + `setup-scoper.sh` + `scoper_server.py` — Mephisto Pi provisioning (gadget mode, llama.cpp, scoper service)
+- `deploy/faust/setup-usb-host.sh` — Faust host-side USB-ethernet
+- `deploy/dev-simulator.sh` — spins up Mac scoper service + UI in separate processes for end-to-end realism
 
-Test coverage: 67 tests across 7 test modules, all mock-backend (no LLM/hardware needed).
+Test coverage: **111 tests across 12 test modules**, all mock-backend (no LLM/hardware needed).
+
+## UI design vision (faust/ui/static/*)
+
+- **Single-view-at-a-time** navigation stack (off → splash → boot → home → category → skill | chat). Never two panels visible at once.
+- **Apple-esque**: SF font stack, generous whitespace, subtle borders, rounded corners.
+- **Color states tied to Mephisto:**
+  - Default (Mephisto undocked): blue accents (#0a84ff), blue 𝑓 logo, blue chat bubbles
+  - When Mephisto docks: body gets `.mephisto-on` class → all blues retint to red (#ff453a). Logo glow goes red, AI tile reds, chat bubbles red.
+- **Breathing glow** layer (`#glow`) sits behind everything — radial gradient from edges. Opacity animates on `body.active` (any in-flight operation) and during boot, color depends on Mephisto state.
+- **Splash sequence:** blue 𝑓 centered → power on → 𝑓 translates upward, boot log streams beneath (~6.4s real-time-ish cadence) → boot complete: `aust` unrolls from the `𝑓` (clip-path/max-width animation, whole word stays centered) + random Goethe quote fades in below → 2.8s later, fades to home.
+- **Faust quotes** are in `app.js` — 10 curated lines from Goethe's Faust, picked at random per boot.
 
 ## What's next (priority order)
 

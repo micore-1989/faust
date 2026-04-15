@@ -1,21 +1,30 @@
 """
 UI web server.
 
-Serves the three-zone touchscreen UI as static HTML/CSS/JS and bridges
-agent events to the browser via WebSocket.
+Serves the three-zone Faust shell as static HTML/CSS/JS and bridges agent
+events to the browser via WebSocket. Holds the authoritative simulator
+state (power/mephisto) so reconnecting clients render correctly.
 
 Architecture:
   - aiohttp serves static files from faust/ui/static/
-  - WebSocket at /ws streams JSON events to connected clients
-  - The EventBridge fans out events from the agent loop to all clients
-  - Touch confirmation responses come back over the same WebSocket
+  - WebSocket at /ws streams JSON events AND state transitions
+  - EventBridge fans out agent events to all WebSocket clients
+  - Server-side state machine (state.SimulatorState) controls boot flow
+  - Direct skill dispatch bypasses the agent and hits the Dispatcher directly
 
-Usage:
-    bridge = EventBridge()
-    server = UIServer(bridge, host="0.0.0.0", port=8080)
-    await server.start()
-    # ... agent loop pushes events to bridge ...
-    await server.stop()
+Message types from client:
+  {"type": "power",       "action": "on"|"off"}
+  {"type": "mephisto",    "action": "connect"|"disconnect"}
+  {"type": "prompt",      "text": "..."}                     (requires FAUST_MEPHISTO)
+  {"type": "dispatch",    "skill": "...", "args": {...}}     (requires booted)
+  {"type": "confirmation","call_id": "...", "approved": true}
+  {"type": "plan_approval","plan_id": "...", "approved": true}
+
+Message types to client (beyond agent events):
+  {"type": "state",       "power": "...", "mephisto": "..."}
+  {"type": "boot_log",    "line": "..."}
+  {"type": "skills",      "skills": [{name, description, category, ...}]}
+  {"type": "error",       "message": "..."}
 """
 
 from __future__ import annotations
@@ -23,14 +32,21 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from aiohttp import web
 
 from .bridge import EventBridge
+from .state import BOOT_DURATION_MS, BOOT_LOG, Mephisto, Power, SimulatorState
 
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+# Callbacks installed by the runner so the server can trigger agent work.
+PromptHandler = Callable[[str], Any]          # -> awaitable; accepts user prompt
+DispatchHandler = Callable[[str, dict], Any]  # -> awaitable; accepts (skill, args)
+StateHandler = Callable[[SimulatorState], Any]  # -> awaitable; reacts to state change
 
 
 class UIServer:
@@ -45,11 +61,17 @@ class UIServer:
         self.bridge = bridge
         self.host = host
         self.port = port
+        self.state = SimulatorState()
+        self.skills_catalog: list[dict[str, Any]] = []  # set by runner
+
         self._app = web.Application()
         self._runner: web.AppRunner | None = None
         self._confirmation_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._plan_approval_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-        self._prompt_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._prompt_handler: PromptHandler | None = None
+        self._dispatch_handler: DispatchHandler | None = None
+        self._state_handler: StateHandler | None = None
+        self._boot_task: asyncio.Task | None = None
 
         # Routes.
         self._app.router.add_get("/ws", self._ws_handler)
@@ -59,40 +81,112 @@ class UIServer:
     async def _index_handler(self, request: web.Request) -> web.FileResponse:
         return web.FileResponse(STATIC_DIR / "index.html")
 
+    # ── Lifecycle ──────────────────────────────────────────────────
+
     async def start(self) -> None:
-        """Start the server (non-blocking — runs in the background)."""
         self._runner = web.AppRunner(self._app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.host, self.port)
         await site.start()
 
     async def stop(self) -> None:
-        """Shut down the server."""
+        if self._boot_task is not None:
+            self._boot_task.cancel()
         if self._runner is not None:
             await self._runner.cleanup()
 
-    async def wait_for_confirmation(self) -> dict[str, Any]:
-        """Block until the UI sends a confirmation response.
+    # ── Handlers for the runner to install ─────────────────────────
 
-        Returns a dict like:
-          {"type": "confirmation", "call_id": "c1", "approved": true}
-        """
+    def set_handlers(
+        self,
+        prompt_handler: PromptHandler | None = None,
+        dispatch_handler: DispatchHandler | None = None,
+        state_handler: StateHandler | None = None,
+    ) -> None:
+        if prompt_handler is not None:
+            self._prompt_handler = prompt_handler
+        if dispatch_handler is not None:
+            self._dispatch_handler = dispatch_handler
+        if state_handler is not None:
+            self._state_handler = state_handler
+
+    def set_skills_catalog(self, skills: list[dict[str, Any]]) -> None:
+        """Installed by the runner after loading skills. Sent to clients
+        once state reaches FAUST_ONLY so the grid can render."""
+        self.skills_catalog = skills
+
+    # ── Queue accessors ────────────────────────────────────────────
+
+    async def wait_for_confirmation(self) -> dict[str, Any]:
         return await self._confirmation_queue.get()
 
-    async def wait_for_prompt(self) -> str:
-        """Block until the UI sends a user prompt."""
-        return await self._prompt_queue.get()
-
     async def wait_for_plan_approval(self) -> dict[str, Any]:
-        """Block until the UI sends a plan approval response.
-
-        Returns:
-          {"type": "plan_approval", "plan_id": "plan-abc", "approved": true}
-        """
         return await self._plan_approval_queue.get()
 
+    # ── State mutations ────────────────────────────────────────────
+
+    async def _broadcast_state(self) -> None:
+        """Push current state to all subscribed clients."""
+        await self.bridge.push_raw(self.state.to_dict())
+        if self._state_handler is not None:
+            maybe = self._state_handler(self.state)
+            if hasattr(maybe, "__await__"):
+                await maybe  # type: ignore[misc]
+
+    async def _power_on(self) -> None:
+        if self.state.power != Power.OFF:
+            return
+        self.state.power = Power.BOOTING
+        self.state.boot_progress = 0
+        await self._broadcast_state()
+
+        async def _boot_sequence():
+            try:
+                speed = 0.85  # slightly faster than real-time for UX snappiness
+                prev_t = 0
+                for t_ms, line in BOOT_LOG:
+                    # Sleep by the DELTA, not the absolute time.
+                    delta_s = max(0, t_ms - prev_t) / 1000 * speed
+                    prev_t = t_ms
+                    await asyncio.sleep(delta_s)
+                    await self.bridge.push_raw({"type": "boot_log", "line": line})
+                    self.state.boot_progress = int(100 * t_ms / BOOT_DURATION_MS)
+                await asyncio.sleep(0.3)
+                self.state.power = Power.ON
+                self.state.boot_progress = 100
+                await self._broadcast_state()
+                # Also push the skills catalog so the UI can render the grid.
+                if self.skills_catalog:
+                    await self.bridge.push_raw({
+                        "type": "skills",
+                        "skills": self.skills_catalog,
+                    })
+            except asyncio.CancelledError:
+                pass
+
+        self._boot_task = asyncio.create_task(_boot_sequence())
+
+    async def _power_off(self) -> None:
+        if self._boot_task is not None and not self._boot_task.done():
+            self._boot_task.cancel()
+        self.state.power = Power.OFF
+        self.state.mephisto = Mephisto.DISCONNECTED
+        self.state.boot_progress = 0
+        await self._broadcast_state()
+
+    async def _mephisto_connect(self) -> None:
+        if self.state.power != Power.ON:
+            return
+        self.state.mephisto = Mephisto.CONNECTED
+        await self._broadcast_state()
+
+    async def _mephisto_disconnect(self) -> None:
+        self.state.mephisto = Mephisto.DISCONNECTED
+        await self._broadcast_state()
+
+    # ── WebSocket handler ──────────────────────────────────────────
+
     async def _ws_handler(self, request: web.Request) -> web.WebSocketResponse:
-        """WebSocket handler: streams events to client, receives confirmations."""
         ws = web.WebSocketResponse()
         await ws.prepare(request)
 
@@ -100,7 +194,11 @@ class UIServer:
         send_task: asyncio.Task | None = None
 
         try:
-            # Task that forwards events from the bridge to this WebSocket.
+            # Push current state + skills on connect (so a refresh "resumes").
+            await ws.send_json(self.state.to_dict())
+            if self.state.power == Power.ON and self.skills_catalog:
+                await ws.send_json({"type": "skills", "skills": self.skills_catalog})
+
             async def _send_loop() -> None:
                 while True:
                     data = await q.get()
@@ -108,27 +206,73 @@ class UIServer:
 
             send_task = asyncio.create_task(_send_loop())
 
-            # Read loop: client sends prompts and confirmation responses.
             async for msg in ws:
-                if msg.type == web.WSMsgType.TEXT:
-                    try:
-                        payload = json.loads(msg.data)
-                        mtype = payload.get("type")
-                        if mtype == "confirmation":
-                            await self._confirmation_queue.put(payload)
-                        elif mtype == "plan_approval":
-                            await self._plan_approval_queue.put(payload)
-                        elif mtype == "prompt":
-                            text = payload.get("text", "").strip()
-                            if text:
-                                await self._prompt_queue.put(text)
-                    except json.JSONDecodeError:
-                        pass
-                elif msg.type == web.WSMsgType.ERROR:
-                    break
+                if msg.type != web.WSMsgType.TEXT:
+                    if msg.type == web.WSMsgType.ERROR:
+                        break
+                    continue
+                try:
+                    payload = json.loads(msg.data)
+                except json.JSONDecodeError:
+                    continue
+
+                await self._handle_incoming(payload)
         finally:
             if send_task is not None:
                 send_task.cancel()
             self.bridge.unsubscribe(q)
 
         return ws
+
+    async def _handle_incoming(self, payload: dict[str, Any]) -> None:
+        mtype = payload.get("type")
+
+        if mtype == "power":
+            action = payload.get("action")
+            if action == "on":
+                await self._power_on()
+            elif action == "off":
+                await self._power_off()
+
+        elif mtype == "mephisto":
+            action = payload.get("action")
+            if action == "connect":
+                await self._mephisto_connect()
+            elif action == "disconnect":
+                await self._mephisto_disconnect()
+
+        elif mtype == "confirmation":
+            await self._confirmation_queue.put(payload)
+
+        elif mtype == "plan_approval":
+            await self._plan_approval_queue.put(payload)
+
+        elif mtype == "prompt":
+            if not self.state.can_accept_prompt():
+                await self.bridge.push_raw({
+                    "type": "error",
+                    "message": "Mephisto not docked — AI agent unavailable. "
+                               "Connect Mephisto or use the skill grid.",
+                })
+                return
+            text = payload.get("text", "").strip()
+            if not text or self._prompt_handler is None:
+                return
+            maybe = self._prompt_handler(text)
+            if hasattr(maybe, "__await__"):
+                await maybe  # type: ignore[misc]
+
+        elif mtype == "dispatch":
+            if not self.state.can_accept_dispatch():
+                await self.bridge.push_raw({
+                    "type": "error",
+                    "message": "unit is off — press power to boot",
+                })
+                return
+            skill = payload.get("skill", "")
+            args = payload.get("args", {}) or {}
+            if not skill or self._dispatch_handler is None:
+                return
+            maybe = self._dispatch_handler(skill, args)
+            if hasattr(maybe, "__await__"):
+                await maybe  # type: ignore[misc]

@@ -40,7 +40,7 @@ async def test_static_files_served():
             # CSS.
             r = await client.get(f"http://localhost:{PORT}/style.css")
             assert r.status_code == 200
-            assert "--bg-primary" in r.text
+            assert "--bg:" in r.text  # our primary background variable
             print(f"  GET /style.css → {r.status_code}")
 
             # JS.
