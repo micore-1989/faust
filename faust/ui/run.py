@@ -106,6 +106,20 @@ def _build_skills_catalog(registry: ToolRegistry) -> list[dict[str, Any]]:
 
 # ── Demo mode (layout only) ────────────────────────────────────
 
+def _demo_load_skills_catalog() -> list[dict[str, Any]]:
+    """Load the on-disk skill catalog for demo mode.
+
+    Mirrors `wire_live_agent`'s skills-loading step without any of the
+    backend/disclosure/agent wiring. The dashboard needs real catalog
+    entries so the seven radio tiles can render tool counts even though
+    demo mode isn't running the agent loop.
+    """
+    registry = ToolRegistry()
+    skills_dir = Path(__file__).resolve().parent.parent.parent / "skills"
+    load_skills_into_registry(skills_dir, registry)
+    return _build_skills_catalog(registry)
+
+
 async def push_demo_events(bridge: EventBridge) -> None:
     await asyncio.sleep(2)
     await bridge.push_event(Thinking(text="Scanning for nearby WiFi networks..."))
@@ -291,6 +305,16 @@ async def main() -> None:
 
     bridge = EventBridge()
     server = UIServer(bridge, port=port)
+
+    # Pre-load the skill catalog in demo mode BEFORE accepting connections,
+    # so clients connecting during the startup window still get a non-empty
+    # skills message. (Live mode's loader runs inside wire_live_agent below,
+    # which is awaited before we enter the `while True` accept loop either.)
+    if demo:
+        demo_catalog = _demo_load_skills_catalog()
+        server.set_skills_catalog(demo_catalog)
+        print(f"  loaded skills: {len(demo_catalog)} (demo mode)")
+
     await server.start()
 
     print(f"\n  𝑓aust UI running at http://localhost:{port}")

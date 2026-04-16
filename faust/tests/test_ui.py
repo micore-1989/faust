@@ -643,6 +643,87 @@ async def test_prompt_handler_does_not_deadlock_on_approval():
     print("✓ prompt handler does not deadlock when awaiting plan_approval")
 
 
+async def test_skills_broadcast_on_connect_when_powered_on():
+    """Regression: a fresh WS connect with `state.power == ON` must receive
+    a `skills` message immediately after the `state` message so the dashboard
+    can render the radio strip without waiting for a re-boot. Previously the
+    connect path was guarded by `and self.skills_catalog` (truthy) which
+    silently skipped the send whenever the catalog happened to be empty,
+    leaving the client permanently stuck at zero skills."""
+    import aiohttp
+    import json as _json
+
+    PORT_LOCAL = PORT + 20
+    bridge = EventBridge()
+    server = UIServer(bridge, port=PORT_LOCAL)
+    server.set_skills_catalog([
+        {
+            "name": "wifi_scan",
+            "description": "passive scan of nearby networks",
+            "category": "wifi_ble",
+            "sensitivity": "passive",
+            "parameters_schema": {"properties": {}, "required": []},
+        },
+    ])
+    # Skip the 6-ish-second boot sequence; we only need state.power == ON
+    # at connect time to exercise the broadcast condition.
+    server.state.power = Power.ON
+
+    await server.start()
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(f"http://localhost:{PORT_LOCAL}/ws") as ws:
+                raw1 = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                assert raw1.type == aiohttp.WSMsgType.TEXT
+                m1 = _json.loads(raw1.data)
+                assert m1["type"] == "state"
+                assert m1["power"] == "on"
+
+                raw2 = await asyncio.wait_for(ws.receive(), timeout=1.0)
+                assert raw2.type == aiohttp.WSMsgType.TEXT
+                m2 = _json.loads(raw2.data)
+                assert m2["type"] == "skills", f"expected 'skills', got {m2!r}"
+                assert isinstance(m2["skills"], list)
+                assert len(m2["skills"]) == 1
+                assert m2["skills"][0]["name"] == "wifi_scan"
+                assert m2["skills"][0]["category"] == "wifi_ble"
+    finally:
+        await server.stop()
+    print("✓ skills broadcast on WS connect when powered on")
+
+
+async def test_demo_mode_populates_skill_catalog():
+    """Regression: `python -m faust.ui.run --demo` must seed the skill
+    catalog so the dashboard's seven radio tiles render real tool counts.
+    Before this fix, demo mode never called `set_skills_catalog`, and the
+    connect-time broadcast sent `{skills: []}`, leaving every group
+    "disabled / no tools available" in the UI."""
+    from faust.ui.run import _demo_load_skills_catalog
+
+    SEVEN_GROUPS = {"wifi_ble", "sub_ghz", "nfc", "lf_rfid", "ir", "vision", "meta"}
+
+    catalog = _demo_load_skills_catalog()
+    assert isinstance(catalog, list)
+    assert len(catalog) > 0, "demo catalog should load real SKILL.md files from disk"
+
+    # Exercise the exact wiring main()'s demo branch performs.
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    server.set_skills_catalog(catalog)
+
+    assert server.skills_catalog is catalog
+    assert len(server.skills_catalog) > 0
+    for entry in server.skills_catalog:
+        assert entry.get("name"), f"entry missing name: {entry!r}"
+        assert entry.get("category") in SEVEN_GROUPS, (
+            f"entry {entry.get('name')!r} has category "
+            f"{entry.get('category')!r} not in {SEVEN_GROUPS}"
+        )
+        assert "sensitivity" in entry
+        assert "parameters_schema" in entry
+    print(f"✓ demo mode loads catalog ({len(catalog)} skills, 7-group categories)")
+
+
 async def main():
     await test_static_files_served()
     await test_bridge_serializes_events()
@@ -661,6 +742,8 @@ async def main():
     await test_pursuit_start_message_spawns_background_task()
     await test_pursuit_start_background_task_does_not_block_receive_loop()
     await test_prompt_handler_does_not_deadlock_on_approval()
+    await test_skills_broadcast_on_connect_when_powered_on()
+    await test_demo_mode_populates_skill_catalog()
     print("\nall UI tests passed")
 
 

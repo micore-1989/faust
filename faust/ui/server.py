@@ -396,8 +396,14 @@ class UIServer:
 
         try:
             # Push current state + skills on connect (so a refresh "resumes").
+            # The skills send is unconditional when powered on, even if the
+            # catalog is empty: an empty list is still a deterministic answer
+            # the client can act on (render zero tiles) rather than stalling
+            # on "no message arrived yet." The earlier `and self.skills_catalog`
+            # guard caused demo mode and the startup-race window to silently
+            # skip this send, leaving the dashboard permanently empty.
             await ws.send_json(self.state.to_dict())
-            if self.state.power == Power.ON and self.skills_catalog:
+            if self.state.power == Power.ON:
                 await ws.send_json({"type": "skills", "skills": self.skills_catalog})
 
             async def _send_loop() -> None:

@@ -635,3 +635,218 @@ body[data-mode="pact"] .top-bar__mode { background: var(--accent-crimson); }
 #boot-screen.boot-fading {
   opacity: 0; pointer-events: none;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 8 — dashboard (spec §10.2)
+   ────────────────────────────────────────────────────────────── */
+
+.dashboard {
+  padding: 24px;
+  height: 100%;
+  display: flex; flex-direction: column; gap: 24px;
+}
+.radio-strip {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.dashboard-bottom {
+  display: grid;
+  grid-template-columns: minmax(348px, 2fr) 3fr;
+  gap: 24px;
+}
+
+.mephisto-tile {
+  background: var(--bg-secondary); opacity: 0.6;
+  border: 0.5px dashed var(--tile-border);
+  padding: 32px 24px;
+  display: flex; flex-direction: column; justify-content: center;
+  cursor: default;
+}
+body[data-mode="pact"] .mephisto-tile {
+  opacity: 1; border: 0.5px solid var(--accent-crimson); cursor: pointer;
+}
+.mephisto-tile__brand {
+  font: 900 24px/1 'Jost'; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-quiet); margin-bottom: 12px;
+}
+body[data-mode="pact"] .mephisto-tile__brand { color: var(--accent-mephisto); }
+.mephisto-tile__status {
+  font: 400 10px/1.4 'JetBrains Mono'; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.mephisto-tile__rule {
+  height: 3px; width: 48px; background: var(--accent-crimson); margin-top: 12px;
+  display: none;
+}
+body[data-mode="pact"] .mephisto-tile__rule { display: block; }
+
+.session-info {
+  padding: 24px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--tile-border);
+  font: 400 11px/1.8 'JetBrains Mono';
+  color: var(--ink-secondary);
+}
+.session-info__row { display: flex; justify-content: space-between; }
+.session-info__key {
+  color: var(--ink-tertiary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+body[data-mode="pact"] .session-info {
+  display: flex; flex-direction: column; gap: 12px;
+  cursor: pointer;
+}
+.session-info__pact-header {
+  display: flex; justify-content: space-between; align-items: baseline;
+}
+.session-info__pact-label {
+  font: 500 12px/1.4 'Jost';
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent-mephisto);
+}
+.session-info__pact-hint {
+  font: 400 10px/1.4 'JetBrains Mono';
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.session-info__pact-rule {
+  height: 3px; width: 48px; background: var(--accent-crimson);
+}
+.session-info__pact-body {
+  font: 400 14px/1.5 'Jost';
+  color: var(--ink-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body[data-mode="pact"] .session-info__pact-body--has-text { color: var(--accent-mephisto); }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 8 — tool-group screen (spec §10.3)
+   ────────────────────────────────────────────────────────────── */
+
+.tool-group { padding: 24px; overflow-y: auto; height: 100%; }
+
+.back-btn {
+  background: transparent; border: none; cursor: pointer;
+  color: var(--ink-secondary); padding: 0; margin-bottom: 16px;
+  display: inline-flex; align-items: center; gap: 8px;
+  font: 400 10px/1.4 'JetBrains Mono'; letter-spacing: 0.12em; text-transform: uppercase;
+}
+.back-btn:active { color: var(--ink-primary); }
+
+.tool-group__header { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+.tool-group__sigil { width: 24px; height: 24px; color: var(--ink-primary); }
+.tool-group__sigil svg { width: 100%; height: 100%; }
+.tool-group__title { margin: 0; }
+
+.rule-heavy--short { width: 48px; height: 3px; background: var(--accent-crimson); margin-bottom: 32px; }
+
+.tool-cards {
+  display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;
+  margin: 16px 0 32px;
+}
+.tool-card {
+  padding: 20px;
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--tile-border);
+  cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; gap: 12px;
+}
+.tool-card:active { background: var(--bg-deep); }
+.tool-card--destructive { border-color: var(--accent-crimson); }
+.tool-card__header { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool-card__name {
+  font: 700 18px/1.2 'Jost';
+  letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--ink-primary);
+}
+.tool-card--destructive .tool-card__name { color: var(--accent-crimson); }
+.tool-card__desc { font: 400 14px/1.5 'Jost'; color: var(--ink-secondary); flex: 1; }
+.tool-card__meta { font: 400 11px/1.55 'JetBrains Mono'; color: var(--ink-tertiary); }
+
+.recent-activity { margin-top: 8px; }
+.recent-activity__row {
+  display: grid;
+  grid-template-columns: 60px 160px 1fr;
+  gap: 16px; padding: 8px 0;
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary);
+}
+.recent-activity__time { color: var(--ink-tertiary); }
+.recent-activity__tool { color: var(--ink-primary); }
+.recent-activity__row--destructive .recent-activity__tool { color: var(--accent-crimson); }
+.recent-activity__empty { color: var(--ink-quiet); padding: 8px 0; }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 8 — parameter-form screen (spec §10.3.1)
+   ────────────────────────────────────────────────────────────── */
+
+.parameter-form { padding: 24px; overflow-y: auto; height: 100%; }
+.parameter-form__title-row {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.parameter-form__desc {
+  margin: 12px 0 24px;
+  color: var(--ink-secondary);
+}
+.parameter-form__fields {
+  display: flex; flex-direction: column; gap: 16px;
+  margin: 24px 0;
+}
+.param-row {
+  display: grid; grid-template-columns: 200px 1fr; gap: 16px;
+  align-items: center;
+}
+.param-row label {
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.param-row input[type="text"],
+.param-row input[type="number"] {
+  font: 400 13px/1.6 'JetBrains Mono';
+  color: var(--ink-primary);
+  background: var(--bg-deep);
+  border: none;
+  padding: 12px 16px;
+  outline: none;
+}
+.param-row__hint {
+  grid-column: 2;
+  font: 400 11px/1.55 'JetBrains Mono';
+  color: var(--ink-tertiary);
+}
+.toggle {
+  width: 16px; height: 16px;
+  background: transparent;
+  border: 1px solid var(--ink-secondary);
+  cursor: pointer;
+}
+.toggle--on { background: var(--accent-active); border-color: var(--accent-active); }
+.segmented { display: flex; gap: 0; }
+.segmented__btn {
+  background: transparent; color: var(--ink-secondary);
+  border: 0.5px solid var(--tile-border);
+  padding: 10px 16px;
+  font: 700 11px/1.4 'Jost';
+  letter-spacing: 0.14em; text-transform: uppercase;
+  cursor: pointer;
+}
+.segmented__btn--active {
+  background: var(--accent-active);
+  color: var(--ink-primary);
+  border-color: var(--accent-active);
+}
+.parameter-form__actions {
+  display: flex; gap: 12px; justify-content: flex-end;
+  margin-top: 32px;
+}
