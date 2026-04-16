@@ -78,4 +78,50 @@ class Final:
     error: str | None = None
 
 
-Event = Union[Thinking, PlanProposed, ToolCallProposed, ToolCallExecuted, Final]
+# ── Two-pass phase markers (see spec §16.1) ─────────────────────
+# The bridge maps these to `planning_started` / `parameterizing_step`
+# WS messages — see faust/ui/bridge.py.
+
+@dataclass(frozen=True)
+class PlanningStarted:
+    """Planner has entered a named phase. `attempt` increments for re-plans."""
+    phase: Literal["catalog", "plan", "replan"]
+    attempt: int = 0
+
+
+@dataclass(frozen=True)
+class CatalogBuildStarted:
+    """Catalog assembly has begun. Bridged as planning_started(phase=catalog)
+    with the skill_count merged in."""
+    skill_count: int
+
+
+@dataclass(frozen=True)
+class ParameterizingStep:
+    """Pass 2 is about to generate arguments for step N of M."""
+    step: int
+    of: int
+    skill: str
+    intent: str
+
+
+@dataclass(frozen=True)
+class ParameterizingDone:
+    """Pass 2 finished generating arguments for step N of M.
+    Internal signal — no WS emission (UI clears its phase marker on the
+    next event)."""
+    step: int
+    of: int
+
+
+Event = Union[
+    Thinking,
+    PlanProposed,
+    ToolCallProposed,
+    ToolCallExecuted,
+    Final,
+    PlanningStarted,
+    CatalogBuildStarted,
+    ParameterizingStep,
+    ParameterizingDone,
+]

@@ -48,9 +48,13 @@ from .catalog import build_catalog
 from .config import AgentConfig
 from .dispatch import Dispatcher
 from .events import (
+    CatalogBuildStarted,
     Event,
     Final,
+    ParameterizingDone,
+    ParameterizingStep,
     PlanProposed,
+    PlanningStarted,
     Thinking,
     ToolCallExecuted,
     ToolCallProposed,
@@ -139,6 +143,8 @@ class TwoPassAgent:
             allowed_names = await self.scoper.top_k(user_input, k=self.config.scoper_k)
 
         catalog = build_catalog(self.dispatcher.registry, allowed_names=allowed_names)
+        yield CatalogBuildStarted(skill_count=len(catalog))
+        yield PlanningStarted(phase="catalog")
         if not catalog:
             yield Final(reason="error", error="no skills available")
             return
@@ -146,6 +152,7 @@ class TwoPassAgent:
         history = self._trim_history(conversation_history)
         cache_section = self.cache.render_prompt_section()
 
+        yield PlanningStarted(phase="plan")
         try:
             plan = await self.planner.plan(
                 user_input, catalog, history=history,
@@ -203,6 +210,13 @@ class TwoPassAgent:
                 )
                 return
 
+            of_total = len(plan.steps)
+            yield ParameterizingStep(
+                step=step_idx,
+                of=of_total,
+                skill=step.skill,
+                intent=step.intent,
+            )
             try:
                 tool_call = await self._parameterize_step(
                     user_input=user_input,
@@ -219,6 +233,7 @@ class TwoPassAgent:
                     error=f"parameter generation failed: {type(e).__name__}: {e}",
                 )
                 return
+            yield ParameterizingDone(step=step_idx, of=of_total)
 
             yield ToolCallProposed(
                 call_id=call_id,
@@ -282,6 +297,7 @@ class TwoPassAgent:
                 and remaining  # only worth re-planning if there's still work
             ):
                 replans_used += 1
+                yield PlanningStarted(phase="replan", attempt=replans_used)
                 # Surface what each completed step actually learned, not just
                 # its name — lets the re-planner reason about real results
                 # instead of guessing.

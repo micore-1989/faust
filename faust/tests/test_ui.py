@@ -17,7 +17,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import httpx
 
-from faust.agent.events import Final, Thinking, ToolCallExecuted, ToolCallProposed
+from faust.agent.events import (
+    CatalogBuildStarted,
+    Final,
+    ParameterizingDone,
+    ParameterizingStep,
+    PlanningStarted,
+    Thinking,
+    ToolCallExecuted,
+    ToolCallProposed,
+)
 from faust.ui.bridge import EventBridge
 from faust.ui.server import UIServer
 from faust.ui.state import Mephisto, Power
@@ -116,6 +125,59 @@ async def test_bridge_unsubscribe():
     print("✓ bridge handles unsubscribe cleanly")
 
 
+async def test_bridge_maps_phase_marker_events():
+    """Spec §2.4: phase-marker dataclasses get custom WS message shapes.
+    CatalogBuildStarted + PlanningStarted → `planning_started`;
+    ParameterizingStep → `parameterizing_step`;
+    ParameterizingDone → suppressed (internal signal only)."""
+    bridge = EventBridge()
+    q = bridge.subscribe()
+
+    # CatalogBuildStarted → planning_started {phase: catalog, skill_count}
+    await bridge.push_event(CatalogBuildStarted(skill_count=12))
+    msg = await q.get()
+    assert msg == {
+        "type": "planning_started",
+        "phase": "catalog",
+        "skill_count": 12,
+    }
+
+    # PlanningStarted(phase=plan) → planning_started {phase, attempt}
+    await bridge.push_event(PlanningStarted(phase="plan"))
+    msg = await q.get()
+    assert msg == {"type": "planning_started", "phase": "plan", "attempt": 0}
+
+    # PlanningStarted(phase=replan, attempt=2) → planning_started with attempt
+    await bridge.push_event(PlanningStarted(phase="replan", attempt=2))
+    msg = await q.get()
+    assert msg == {"type": "planning_started", "phase": "replan", "attempt": 2}
+
+    # ParameterizingStep → parameterizing_step
+    await bridge.push_event(ParameterizingStep(
+        step=2, of=5, skill="wifi_scan", intent="find APs",
+    ))
+    msg = await q.get()
+    assert msg == {
+        "type": "parameterizing_step",
+        "step": 2,
+        "of": 5,
+        "skill": "wifi_scan",
+        "intent": "find APs",
+    }
+
+    # ParameterizingDone → suppressed (queue stays empty).
+    await bridge.push_event(ParameterizingDone(step=2, of=5))
+    # Follow up with a known event to prove the queue is still live.
+    await bridge.push_event(Final(reason="end_turn"))
+    msg = await q.get()
+    assert msg["type"] == "final", (
+        f"ParameterizingDone leaked onto the wire as: {msg}"
+    )
+
+    bridge.unsubscribe(q)
+    print("✓ bridge maps phase-marker events per spec §2.4")
+
+
 async def test_bridge_push_raw():
     bridge = EventBridge()
     q = bridge.subscribe()
@@ -195,6 +257,7 @@ async def main():
     await test_bridge_serializes_events()
     await test_bridge_fan_out()
     await test_bridge_unsubscribe()
+    await test_bridge_maps_phase_marker_events()
     await test_bridge_push_raw()
     await test_prompt_handler_does_not_deadlock_on_approval()
     print("\nall UI tests passed")

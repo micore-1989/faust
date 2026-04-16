@@ -28,8 +28,12 @@ from faust.agent.backends import AssistantMessage, LLMBackend, ToolCall
 from faust.agent.config import AgentConfig
 from faust.agent.dispatch import Dispatcher
 from faust.agent.events import (
+    CatalogBuildStarted,
     Final,
+    ParameterizingDone,
+    ParameterizingStep,
     PlanProposed,
+    PlanningStarted,
     ToolCallExecuted,
     ToolCallProposed,
 )
@@ -193,11 +197,12 @@ async def test_plan_proposed_event_emitted_before_execution():
     agent = TwoPassAgent(backend, Dispatcher(registry), AgentConfig())
     events = await collect(agent, "scan")
 
-    # Order must be: PlanProposed → ToolCallProposed → ToolCallExecuted → Final
+    # Order: <phase markers> → PlanProposed → <parameterize markers> →
+    # ToolCallProposed → ToolCallExecuted → Final. PlanProposed must precede
+    # any ToolCallProposed.
     types = [type(e).__name__ for e in events]
-    assert types[0] == "PlanProposed"
+    assert "PlanProposed" in types
     assert types[-1] == "Final"
-    # PlanProposed must come before any ToolCallProposed.
     plan_idx = types.index("PlanProposed")
     tool_idx = types.index("ToolCallProposed")
     assert plan_idx < tool_idx
@@ -293,6 +298,148 @@ async def test_planner_non_tool_response_returns_empty_plan():
     print("✓ planner without submit_plan call returns empty plan cleanly")
 
 
+async def test_phase_marker_events_three_step_plan():
+    """With a 3-step plan, phase-marker events fire in the documented order
+    and counts, interleaved with the existing tool-call events."""
+    registry = _mk_registry([
+        ("wifi_scan", "Scan WiFi"),
+        ("ble_scan", "Scan BLE"),
+        ("nfc_read", "Read NFC"),
+    ])
+    backend = MockBackend([
+        _plan_response("three steps", [
+            {"skill": "wifi_scan", "intent": "find nets"},
+            {"skill": "ble_scan", "intent": "find devices"},
+            {"skill": "nfc_read", "intent": "read tag"},
+        ]),
+        _tool_response("wifi_scan", {}),
+        _tool_response("ble_scan", {}),
+        _tool_response("nfc_read", {}),
+    ])
+    agent = TwoPassAgent(backend, Dispatcher(registry), AgentConfig())
+    events = await collect(agent, "scan all the things")
+
+    types = [type(e).__name__ for e in events]
+
+    # Counts — must match spec exactly.
+    assert types.count("CatalogBuildStarted") == 1
+    assert types.count("PlanningStarted") == 2  # phase=catalog + phase=plan
+    assert types.count("ParameterizingStep") == 3
+    assert types.count("ParameterizingDone") == 3
+    assert types.count("PlanProposed") == 1
+    assert types.count("ToolCallProposed") == 3
+    assert types.count("ToolCallExecuted") == 3
+    assert types.count("Final") == 1
+
+    # Phase markers precede PlanProposed.
+    plan_idx = types.index("PlanProposed")
+    assert types.index("CatalogBuildStarted") < plan_idx
+    planning_indices = [i for i, n in enumerate(types) if n == "PlanningStarted"]
+    assert all(i < plan_idx for i in planning_indices)
+
+    # PlanningStarted phases are catalog and plan (in this order is natural,
+    # but the task explicitly allows either ordering for catalog vs
+    # CatalogBuildStarted — enforce phase set instead).
+    planning_phases = [e.phase for e in events if isinstance(e, PlanningStarted)]
+    assert set(planning_phases) == {"catalog", "plan"}
+
+    # Each ParameterizingStep has step=N of=3 with correct skill/intent.
+    param_steps = [e for e in events if isinstance(e, ParameterizingStep)]
+    assert [(p.step, p.of) for p in param_steps] == [(1, 3), (2, 3), (3, 3)]
+    assert [p.skill for p in param_steps] == ["wifi_scan", "ble_scan", "nfc_read"]
+    assert all(p.intent for p in param_steps)
+
+    # Each ParameterizingDone mirrors the preceding ParameterizingStep.
+    param_done = [e for e in events if isinstance(e, ParameterizingDone)]
+    assert [(p.step, p.of) for p in param_done] == [(1, 3), (2, 3), (3, 3)]
+
+    # Relative order for step 1: ParameterizingStep(1) → ParameterizingDone(1)
+    # → ToolCallProposed → ToolCallExecuted.
+    ps1 = next(i for i, e in enumerate(events)
+               if isinstance(e, ParameterizingStep) and e.step == 1)
+    pd1 = next(i for i, e in enumerate(events)
+               if isinstance(e, ParameterizingDone) and e.step == 1)
+    tp1 = next(i for i, e in enumerate(events) if isinstance(e, ToolCallProposed))
+    te1 = next(i for i, e in enumerate(events) if isinstance(e, ToolCallExecuted))
+    assert ps1 < pd1 < tp1 < te1
+
+    # CatalogBuildStarted.skill_count matches registry size.
+    cbs = next(e for e in events if isinstance(e, CatalogBuildStarted))
+    assert cbs.skill_count == 3
+
+    assert types[-1] == "Final"
+    print("✓ phase-marker events fire in spec order and counts")
+
+
+async def test_replan_emits_planning_started_replan_phase():
+    """When a step errors and triggers a re-plan, PlanningStarted(phase=replan,
+    attempt=1) fires before the revised plan comes back."""
+    def bad(args):
+        raise ValueError("hardware failure")
+
+    def good(args):
+        return {"ok": True}
+
+    reg = ToolRegistry()
+    for name, fn in [("fail_tool", bad), ("good_tool", good)]:
+        reg.register(Tool(
+            name=name, description=f"test {name}",
+            parameters_schema={"type": "object", "properties": {}},
+            fn=fn, sensitivity="passive",
+        ))
+
+    backend = MockBackend([
+        _plan_response("orig", [
+            {"skill": "fail_tool", "intent": "try"},
+            {"skill": "good_tool", "intent": "recover"},
+        ]),
+        _tool_response("fail_tool", {}),
+        _plan_response("revised", [{"skill": "good_tool", "intent": "recover"}]),
+        _tool_response("good_tool", {}),
+    ])
+    cfg = AgentConfig(scoper_enabled=False, replan_enabled=True)
+    agent = TwoPassAgent(backend, Dispatcher(reg), cfg)
+    events = await collect(agent, "do stuff")
+
+    replan_markers = [
+        e for e in events
+        if isinstance(e, PlanningStarted) and e.phase == "replan"
+    ]
+    assert len(replan_markers) == 1
+    assert replan_markers[0].attempt == 1
+
+    # It fires after the first tool executes but before the second PlanProposed.
+    replan_idx = events.index(replan_markers[0])
+    plan_indices = [i for i, e in enumerate(events) if isinstance(e, PlanProposed)]
+    assert len(plan_indices) == 2
+    assert plan_indices[0] < replan_idx < plan_indices[1]
+    print("✓ re-plan emits PlanningStarted(phase=replan, attempt=N)")
+
+
+async def test_phase_markers_fire_with_single_step_plan():
+    """Minimum-coverage sanity: even a 1-step plan emits the full phase set."""
+    registry = _mk_registry([("wifi_scan", "Scan")])
+    backend = MockBackend([
+        _plan_response("one step", [{"skill": "wifi_scan", "intent": "scan"}]),
+        _tool_response("wifi_scan", {}),
+    ])
+    agent = TwoPassAgent(backend, Dispatcher(registry), AgentConfig())
+    events = await collect(agent, "scan")
+
+    assert any(isinstance(e, CatalogBuildStarted) for e in events)
+    planning_phases = [e.phase for e in events if isinstance(e, PlanningStarted)]
+    assert "catalog" in planning_phases and "plan" in planning_phases
+
+    param_steps = [e for e in events if isinstance(e, ParameterizingStep)]
+    assert len(param_steps) == 1
+    assert param_steps[0].step == 1 and param_steps[0].of == 1
+    assert param_steps[0].skill == "wifi_scan"
+
+    param_done = [e for e in events if isinstance(e, ParameterizingDone)]
+    assert len(param_done) == 1
+    print("✓ phase markers fire on single-step plans")
+
+
 async def main():
     await test_plan_only_sees_catalog_not_schemas()
     await test_each_step_sees_exactly_one_tool_schema()
@@ -302,6 +449,9 @@ async def main():
     await test_empty_plan_ends_cleanly()
     await test_missing_skill_in_plan_errors()
     await test_planner_non_tool_response_returns_empty_plan()
+    await test_phase_marker_events_three_step_plan()
+    await test_replan_emits_planning_started_replan_phase()
+    await test_phase_markers_fire_with_single_step_plan()
     print("\nall two-pass tests passed")
 
 

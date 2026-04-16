@@ -19,7 +19,13 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from ..agent.events import Event
+from ..agent.events import (
+    CatalogBuildStarted,
+    Event,
+    ParameterizingDone,
+    ParameterizingStep,
+    PlanningStarted,
+)
 
 
 class EventBridge:
@@ -39,8 +45,12 @@ class EventBridge:
         self._subscribers = [s for s in self._subscribers if s is not q]
 
     async def push_event(self, event: Event) -> None:
-        """Convert an agent Event to JSON and broadcast to all subscribers."""
+        """Convert an agent Event to JSON and broadcast to all subscribers.
+        Events mapped to `None` (e.g. ParameterizingDone) are dropped — they're
+        internal signals the UI doesn't render."""
         data = _event_to_dict(event)
+        if data is None:
+            return
         for q in self._subscribers:
             await q.put(data)
 
@@ -50,8 +60,35 @@ class EventBridge:
             await q.put(data)
 
 
-def _event_to_dict(event: Event) -> dict[str, Any]:
-    """Serialize an Event dataclass to a JSON-safe dict."""
+def _event_to_dict(event: Event) -> dict[str, Any] | None:
+    """Serialize an Event dataclass to a JSON-safe dict.
+
+    Phase-marker events (§2.4) use custom mappings: their wire message type
+    does not match the dataclass name. `ParameterizingDone` intentionally
+    returns None — it's an internal signal with no WS shape.
+    """
+    if isinstance(event, CatalogBuildStarted):
+        return {
+            "type": "planning_started",
+            "phase": "catalog",
+            "skill_count": event.skill_count,
+        }
+    if isinstance(event, PlanningStarted):
+        return {
+            "type": "planning_started",
+            "phase": event.phase,
+            "attempt": event.attempt,
+        }
+    if isinstance(event, ParameterizingStep):
+        return {
+            "type": "parameterizing_step",
+            "step": event.step,
+            "of": event.of,
+            "skill": event.skill,
+            "intent": event.intent,
+        }
+    if isinstance(event, ParameterizingDone):
+        return None
     d = asdict(event)
     # asdict handles nested dataclasses. We just need to ensure
     # everything is JSON-serializable.
