@@ -1,853 +1,424 @@
-/* ──────────────────────────────────────────────────────────────────
-   Faust UI v2 — minimal, scientific, blue (default) / red (mephisto)
-   ────────────────────────────────────────────────────────────────── */
+/* Faust UI — Foundation stylesheet (Stage 1)
+   Spec: faust-ui-spec.md §1 §4 §5 §6 §7 §12 §17.7
+   Companion: faust-sigil-spec.md §2 §4 */
 
-:root {
-    /* Ink */
-    --bg:             #000000;
-    --bg-raised:      #0b0b0d;
-    --bg-card:        #111114;
-    --bg-field:       #17171b;
-    --border:         #1f1f25;
-    --border-strong:  #2a2a32;
+/* ──────────────────────────────────────────────────────────────
+   §5.2 — Font face declarations
+   ────────────────────────────────────────────────────────────── */
 
-    /* Text */
-    --text:           #f3f4f6;
-    --text-2:         #a9adb8;
-    --text-3:         #6c717d;
-    --text-dim:       #44474f;
-
-    /* Accents */
-    --blue:           #0a84ff;     /* default system accent */
-    --blue-soft:      rgba(10, 132, 255, 0.18);
-    --blue-glow:      rgba(10, 132, 255, 0.35);
-
-    --red:            #ff453a;     /* mephisto mode */
-    --red-soft:       rgba(255, 69, 58, 0.18);
-    --red-glow:       rgba(255, 69, 58, 0.35);
-
-    /* Feedback */
-    --success:        #30d158;
-    --warn:           #ffd60a;
-
-    /* Rhythm */
-    --radius:         12px;
-    --radius-sm:      8px;
-    --touch-min:      44px;
-    --bar-h:          56px;
+@font-face {
+  font-family: 'Jost';
+  src: url('/assets/fonts/Jost-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Jost';
+  src: url('/assets/fonts/Jost-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Jost';
+  src: url('/assets/fonts/Jost-Bold.woff2') format('woff2');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Jost';
+  src: url('/assets/fonts/Jost-Black.woff2') format('woff2');
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/assets/fonts/JetBrainsMono-Regular.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/assets/fonts/JetBrainsMono-Medium.woff2') format('woff2');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
 }
 
-/* Reset ────────────────────────────────────────────────────────── */
+/* ──────────────────────────────────────────────────────────────
+   §4.1 — Palette tokens
+   ────────────────────────────────────────────────────────────── */
+
+:root {
+  /* Scholar backgrounds — desaturated plum/near-black from illustration */
+  --scholar-bg-primary:    #3E2E46;
+  --scholar-bg-secondary:  #2B1F32;
+  --scholar-bg-deep:       #211728;
+  --scholar-tile-border:   #5A4665;
+  --scholar-dot-idle:      #5A4665;
+
+  /* Pact backgrounds — deepest red-black from illustration */
+  --pact-bg-primary:       #420203;
+  --pact-bg-secondary:     #2D0102;
+  --pact-bg-deep:          #1A0001;
+  --pact-tile-border:      #6B1018;
+  --pact-dot-idle:         #6B1018;
+
+  /* Shared ink — cream/off-white */
+  --ink-primary:           #E8DCC0;
+  --ink-secondary:         #BCAE92;
+  --ink-tertiary:          #857A66;
+  --ink-quiet:             #5F574A;
+
+  /* Shared semantic accents */
+  --accent-crimson:        #A20C28;
+  --accent-crimson-deep:   #8B0F20;   /* primary-button press feedback */
+  --accent-active:         #931319;
+  --accent-mephisto:       #D83A7A;
+  --accent-thinking:       #8F5FE0;
+  --accent-scope:          #E5A500;
+  --accent-success:        #4DC0B5;
+  --accent-scholar:        #8A6FA0;
+
+  /* Modal backdrop overlay (rgba, mode-reactive) */
+  --modal-backdrop:        rgba(6, 14, 34, 0.7);
+
+  /* Mode-switched aliases (used by components) */
+  --bg-primary:            var(--scholar-bg-primary);
+  --bg-secondary:          var(--scholar-bg-secondary);
+  --bg-deep:               var(--scholar-bg-deep);
+  --tile-border:           var(--scholar-tile-border);
+  --dot-idle:              var(--scholar-dot-idle);
+
+  /* §6.4 Spacing scale */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  24px;
+  --space-6:  32px;
+  --space-7:  48px;
+  --space-8:  64px;
+}
+
+body[data-mode="pact"] {
+  --bg-primary:            var(--pact-bg-primary);
+  --bg-secondary:          var(--pact-bg-secondary);
+  --bg-deep:               var(--pact-bg-deep);
+  --tile-border:           var(--pact-tile-border);
+  --dot-idle:              var(--pact-dot-idle);
+  --modal-backdrop:        rgba(26, 8, 6, 0.7);
+}
+
+/* ──────────────────────────────────────────────────────────────
+   §12.1 — Global transition on palette-derived properties
+   ────────────────────────────────────────────────────────────── */
+
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 1000ms;
+  transition-timing-function: ease-in-out;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Base reset + §17.7 kiosk quirks
+   ────────────────────────────────────────────────────────────── */
+
 *, *::before, *::after {
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  border-radius: 0;
 }
 
 html, body {
-    width: 1280px;
-    height: 800px;
-    overflow: hidden;
-    background: var(--bg);
-    color: var(--text);
-    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text",
-                 "Helvetica Neue", system-ui, sans-serif;
-    font-size: 15px;
-    line-height: 1.45;
-    letter-spacing: -0.01em;
-    -webkit-font-smoothing: antialiased;
+  width: 1280px;
+  height: 800px;
+  overflow: hidden;
 }
 
-button, input, select, textarea {
-    font: inherit;
-    color: inherit;
+body {
+  background: var(--bg-primary);
+  color: var(--ink-primary);
+  font: 400 14px/1.5 'Jost', system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+  scrollbar-width: none;
 }
 
-/* Breathing glow layer ─────────────────────────────────────────── */
-#glow {
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    z-index: 0;
-    /* Default accent is blue; switches to red with body.mephisto-on */
-    --accent: var(--blue);
-    --accent-glow: var(--blue-glow);
-    background:
-        radial-gradient(ellipse 900px 500px at center 110%, var(--accent-glow), transparent 60%),
-        radial-gradient(ellipse 700px 400px at -10% 30%, var(--accent-glow), transparent 60%),
-        radial-gradient(ellipse 700px 400px at 110% 70%, var(--accent-glow), transparent 60%);
-    opacity: 0.0;
-    transition: opacity 600ms ease;
+input, textarea {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
-body.mephisto-on #glow {
-    --accent: var(--red);
-    --accent-glow: var(--red-glow);
+::-webkit-scrollbar { display: none; }
+* { scrollbar-width: none; }
+
+button {
+  font-family: inherit;
+  color: inherit;
 }
 
-/* Breathe when the device is active OR during boot/tool runs. */
-body.active #glow,
-body.view-booting #glow {
-    animation: breathe 4.5s ease-in-out infinite;
-}
+/* ──────────────────────────────────────────────────────────────
+   §5.4 — Typography utility classes
+   ────────────────────────────────────────────────────────────── */
 
-@keyframes breathe {
-    0%, 100% { opacity: 0.20; }
-    50%      { opacity: 0.65; }
-}
+.type-wordmark-xl { font: 900 96px/1 'Jost'; letter-spacing: -0.02em; text-transform: uppercase; }
+.type-wordmark-l  { font: 900 56px/1 'Jost'; letter-spacing: -0.02em; text-transform: uppercase; }
+.type-wordmark-m  { font: 900 36px/1 'Jost'; letter-spacing: -0.02em; text-transform: uppercase; }
+.type-wordmark-s  { font: 900 18px/1 'Jost'; letter-spacing:  0.16em; text-transform: uppercase; }
 
-/* A subtle ambient glow when idle/booted, without the breathing */
-body.view-home #glow,
-body.view-category #glow,
-body.view-skill #glow,
-body.view-chat #glow {
-    opacity: 0.12;
-}
+.type-h1 { font: 700 28px/1.1 'Jost';  letter-spacing: -0.005em; }
+.type-h2 { font: 700 22px/1.15 'Jost'; letter-spacing: -0.005em; }
+.type-h3 { font: 700 18px/1.2 'Jost';  letter-spacing: -0.005em; }
 
-/* View stack ───────────────────────────────────────────────────── */
-.view {
-    display: none;
-    position: absolute;
-    inset: 0;
-    z-index: 1;
-    flex-direction: column;
-}
+.type-body-l      { font: 400 16px/1.5 'Jost'; }
+.type-body        { font: 400 14px/1.5 'Jost'; }
+.type-body-medium { font: 500 14px/1.5 'Jost'; }
 
-body.view-splash   .view-splash   { display: flex; align-items: center; justify-content: center; }
-body.view-home     .view-home     { display: flex; }
-body.view-category .view-category { display: flex; }
-body.view-skill    .view-skill    { display: flex; }
-body.view-chat     .view-chat     { display: flex; }
+.type-meta-label { font: 500 12px/1.4 'Jost'; letter-spacing: 0.14em; text-transform: uppercase; }
+.type-button     { font: 700 13px/1.4 'Jost'; letter-spacing: 0.22em; text-transform: uppercase; }
+.type-tab-label  { font: 700 11px/1.4 'Jost'; letter-spacing: 0.14em; text-transform: uppercase; }
 
-/* SPLASH (off → booting → complete) ──────────────────────────── */
+.type-mono-l      { font: 400 14px/1.6 'JetBrains Mono'; }
+.type-mono        { font: 400 12px/1.6 'JetBrains Mono'; }
+.type-mono-s      { font: 400 11px/1.55 'JetBrains Mono'; }
+.type-mono-xs     { font: 400 10px/1.4 'JetBrains Mono'; letter-spacing: 0.12em; text-transform: uppercase; }
+.type-mono-medium { font: 500 12px/1.6 'JetBrains Mono'; }
 
-/* The frame is a vertical stack; its children move / fade by stage. */
-.splash-frame {
-    position: relative;
-    width: 100%;
-    height: 800px;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
+/* ──────────────────────────────────────────────────────────────
+   §7.1 — Top bar
+   ────────────────────────────────────────────────────────────── */
 
-/* Wordmark anchor — vertically centered by default,
-   moved up toward the top during booting/complete. */
-.splash-word {
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    white-space: nowrap;
-    font-family: "Times New Roman", "Iowan Old Style", serif;
-    font-style: italic;
-    font-size: 128px;
-    line-height: 1;
-    color: var(--blue);
-    text-shadow: 0 0 48px rgba(10, 132, 255, 0.30);
-    transition:
-        top 900ms cubic-bezier(0.22, 1, 0.36, 1),
-        color 600ms ease,
-        text-shadow 600ms ease;
-}
-
-body.mephisto-on .splash-word {
-    color: var(--red);
-    text-shadow: 0 0 48px rgba(255, 69, 58, 0.30);
-}
-
-/* Move the word to the upper third during boot and after. */
-body.stage-booting .splash-word,
-body.stage-complete .splash-word {
-    top: 24%;
-}
-
-/* f is always visible. 'aust' reveals on stage-complete only. */
-.logo-f, .logo-aust {
-    display: inline-block;
-    vertical-align: baseline;
-}
-
-.logo-aust {
-    max-width: 0;
-    overflow: hidden;
-    transform-origin: left center;
-    /* Use opacity too for a smooth entry */
-    opacity: 0;
-    transition:
-        max-width 1000ms cubic-bezier(0.22, 1, 0.36, 1),
-        opacity 700ms ease 200ms;
-}
-
-body.stage-complete .logo-aust {
-    max-width: 360px;  /* plenty for "aust" at 128px */
-    opacity: 1;
-}
-
-/* Tagline + CTA — centered below the word in off; fade out otherwise */
-.tagline {
-    position: absolute;
-    top: calc(50% + 88px);
-    left: 50%;
-    transform: translateX(-50%);
-    color: var(--text-3);
-    font-size: 13px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    transition: opacity 500ms ease;
-}
-
-.splash-cta {
-    position: absolute;
-    top: calc(50% + 150px);
-    left: 50%;
-    transform: translateX(-50%);
-    transition: opacity 400ms ease;
-}
-
-body.stage-booting .tagline,
-body.stage-complete .tagline,
-body.stage-booting .splash-cta,
-body.stage-complete .splash-cta {
-    opacity: 0;
-    pointer-events: none;
-}
-
-/* Boot log area — hidden in off, visible during booting/complete (fades out on complete) */
-.boot-area {
-    position: absolute;
-    top: 44%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 820px;
-    max-width: 90%;
-    opacity: 0;
-    transition: opacity 500ms ease;
-}
-
-body.stage-booting .boot-area {
-    opacity: 1;
-}
-
-body.stage-complete .boot-area {
-    opacity: 0;
-    transition: opacity 400ms ease;
-}
-
-.boot-log {
-    font-family: "SF Mono", "JetBrains Mono", Menlo, monospace;
-    font-size: 12px;
-    line-height: 1.7;
-    color: var(--text-2);
-    white-space: pre;
-    max-height: 340px;
-    overflow: hidden;
-    mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 40px), transparent 100%);
-    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 40px, black calc(100% - 40px), transparent 100%);
-}
-
-.boot-log .boot-line {
-    opacity: 0;
-    animation: fadein 0.12s forwards;
-}
-
-.boot-bar {
-    height: 1px;
-    background: var(--border);
-    margin-top: 20px;
-    border-radius: 1px;
-    overflow: hidden;
-}
-.boot-bar-fill {
-    height: 100%;
-    background: var(--blue);
-    width: 0%;
-    transition: width 300ms ease-out;
-}
-body.mephisto-on .boot-bar-fill { background: var(--red); }
-
-/* Quote fades in during stage-complete, where the boot log used to be. */
-.splash-quote {
-    position: absolute;
-    top: 54%;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 820px;
-    max-width: 88%;
-    text-align: center;
-    opacity: 0;
-    font-family: "Times New Roman", "Iowan Old Style", serif;
-    font-style: italic;
-    font-size: 20px;
-    color: var(--text-2);
-    line-height: 1.55;
-    transition: opacity 900ms ease 500ms;
-}
-
-.splash-quote .attribution {
-    display: block;
-    margin-top: 14px;
-    font-size: 12px;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-    color: var(--text-3);
-    font-style: normal;
-    font-family: inherit;
-}
-
-body.stage-complete .splash-quote {
-    opacity: 1;
-}
-
-@keyframes fadein { to { opacity: 1; } }
-
-/* Primary / secondary buttons ─────────────────────────────────── */
-.btn-primary {
-    min-width: 140px;
-    min-height: var(--touch-min);
-    padding: 10px 28px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: var(--blue);
-    color: white;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 120ms, transform 80ms;
-}
-.btn-primary:hover { background: #2394ff; }
-.btn-primary:active { transform: scale(0.98); }
-.btn-primary:disabled {
-    opacity: 0.35;
-    cursor: default;
-}
-body.mephisto-on .btn-primary { background: var(--red); }
-body.mephisto-on .btn-primary:hover { background: #ff5850; }
-
-.btn-ghost {
-    min-height: var(--touch-min);
-    padding: 10px 20px;
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius-sm);
-    font-size: 14px;
-    cursor: pointer;
-    transition: background 120ms, border-color 120ms;
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-}
-.btn-ghost:hover { background: var(--bg-card); border-color: var(--text-dim); }
-.btn-ghost:active { background: var(--bg-raised); }
-
-.btn-icon {
-    width: var(--touch-min);
-    height: var(--touch-min);
-    border-radius: var(--radius-sm);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    background: transparent;
-    border: 1px solid var(--border-strong);
-    color: var(--text-2);
-    font-size: 16px;
-    cursor: pointer;
-    transition: all 120ms;
-}
-.btn-icon:hover { background: var(--bg-card); color: var(--text); }
-
-.btn-red-outline {
-    border-color: rgba(255, 69, 58, 0.4);
-    color: var(--red);
-}
-.btn-red-outline:hover { background: rgba(255, 69, 58, 0.08); border-color: var(--red); }
-
-/* (Boot log styles are defined in the splash block above.) */
-
-/* Top bar (shared across views except OFF/BOOTING) ───────────── */
 .top-bar {
-    height: var(--bar-h);
-    padding: 0 24px;
-    display: grid;
-    grid-template-columns: auto 1fr auto;
-    align-items: center;
-    gap: 16px;
-    border-bottom: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(12px);
+  height: 64px;
+  background: var(--bg-primary);
+  border-bottom: 0.5px solid var(--tile-border);
+  padding: 0 var(--space-5);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
-.brand {
-    font-family: "Times New Roman", serif;
-    font-style: italic;
-    font-size: 20px;
-    color: var(--text);
-    letter-spacing: 0.5px;
+/* ──────────────────────────────────────────────────────────────
+   §7.4 — Panel / tile
+   ────────────────────────────────────────────────────────────── */
+
+.panel {
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--tile-border);
+  padding: var(--space-4);
 }
 
-.title {
-    font-size: 17px;
-    font-weight: 600;
-    letter-spacing: -0.01em;
-    color: var(--text);
+/* ──────────────────────────────────────────────────────────────
+   §7.5 — Status dot (8×8 hard square)
+   ────────────────────────────────────────────────────────────── */
+
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.dot--active { background: var(--accent-active); }
+.dot--idle   { background: var(--dot-idle); }
+.dot--error  { background: var(--accent-crimson); }
+
+/* ──────────────────────────────────────────────────────────────
+   §7.3 — Button
+   ────────────────────────────────────────────────────────────── */
+
+.btn-primary {
+  font: 700 13px/1.4 'Jost';
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 16px 24px;
+  background: var(--accent-crimson);
+  color: var(--ink-primary);
+  border: none;
+  cursor: pointer;
+}
+.btn-primary:active { background: var(--accent-crimson-deep); }
+
+.btn-secondary {
+  font: 700 13px/1.4 'Jost';
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  padding: 16px 24px;
+  background: transparent;
+  color: var(--ink-secondary);
+  border: 0.5px solid var(--ink-secondary);
+  cursor: pointer;
+}
+.btn-secondary:active { background: var(--bg-secondary); }
+
+/* ──────────────────────────────────────────────────────────────
+   §7.7 — Heavy rule
+   ────────────────────────────────────────────────────────────── */
+
+.rule-heavy          { height: 3px; background: var(--accent-crimson); }
+.rule-heavy-scholar  { height: 3px; background: var(--accent-scholar); }
+.rule-heavy-scope    { height: 3px; background: var(--accent-scope); }
+
+/* ──────────────────────────────────────────────────────────────
+   §7.8 — Hairline
+   ────────────────────────────────────────────────────────────── */
+
+.rule-hair { height: 0.5px; background: var(--tile-border); }
+
+/* ──────────────────────────────────────────────────────────────
+   §7.9 — Mono code block
+   ────────────────────────────────────────────────────────────── */
+
+.mono-block {
+  background: var(--bg-deep);
+  color: var(--accent-active);
+  font: 400 12px/1.6 'JetBrains Mono';
+  padding: 12px 16px;
+  border-left: 3px solid var(--accent-active);
+  word-break: break-all;
+  margin: var(--space-3) 0;
+}
+.mono-block--neutral {
+  color: var(--ink-primary);
+  border-left-color: var(--ink-secondary);
+}
+.mono-block--destructive {
+  color: var(--accent-crimson);
+  border-left-color: var(--accent-crimson);
 }
 
-.status-right {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    justify-self: end;
+/* ──────────────────────────────────────────────────────────────
+   §7.10 — Modal
+   ────────────────────────────────────────────────────────────── */
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--modal-backdrop);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+.modal {
+  background: var(--bg-secondary);
+  border: 1px solid var(--accent-crimson);
+  width: 60%;
+  max-width: 640px;
+}
+.modal__header {
+  background: var(--accent-crimson);
+  color: var(--ink-primary);
+  padding: 14px 24px;
+  font: 900 22px/1 'Jost';
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+.modal__body { padding: 24px; }
+.modal__buttons {
+  display: flex;
+  border-top: 0.5px solid var(--tile-border);
+}
+.modal__buttons > button {
+  flex: 1;
+  border: none;
+  padding: 18px 24px;
+  font: 700 13px/1.4 'Jost';
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  cursor: pointer;
+  background: transparent;
+  color: var(--ink-primary);
 }
 
-.status-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    padding: 6px 12px;
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    font-size: 12px;
-    color: var(--text-2);
-}
-
-.dot, .dot-inline {
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: var(--text-dim);
-    flex-shrink: 0;
-}
-.dot.connected    { background: var(--red); box-shadow: 0 0 8px var(--red-glow); }
-.dot.disconnected { background: var(--text-dim); }
-
-.back-btn {
-    width: 36px;
-    height: 36px;
-    border-radius: 50%;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-size: 18px;
-    cursor: pointer;
-    transition: background 120ms;
-}
-.back-btn:hover { background: var(--bg-field); }
+/* ──────────────────────────────────────────────────────────────
+   §7.11 — Sensitivity pill (preserved)
+   ────────────────────────────────────────────────────────────── */
 
 .sensitivity-pill {
-    padding: 4px 10px;
-    border-radius: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+  display: inline-block;
+  padding: 2px 8px;
+  font: 500 10px/1.4 'JetBrains Mono';
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-left: var(--space-2);
 }
-.sensitivity-pill.passive    { background: var(--blue-soft); color: var(--blue); }
-.sensitivity-pill.active     { background: rgba(255, 214, 10, 0.15); color: var(--warn); }
-.sensitivity-pill.disruptive { background: var(--red-soft); color: var(--red); }
+.sensitivity-pill--passive    { background: var(--ink-quiet);      color: var(--bg-primary); }
+.sensitivity-pill--active     { background: var(--accent-active);  color: var(--ink-primary); }
+.sensitivity-pill--disruptive { background: var(--accent-crimson); color: var(--ink-primary); }
 
-/* Bottom bar ─────────────────────────────────────────────────── */
-.bottom-bar {
-    height: var(--bar-h);
-    padding: 0 24px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border-top: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.4);
-    backdrop-filter: blur(12px);
+/* ──────────────────────────────────────────────────────────────
+   §7.6 + sigil spec §4 — Radio-status tile
+   ────────────────────────────────────────────────────────────── */
+
+.radio-tile {
+  background: var(--bg-secondary);
+  border: 0.5px solid var(--tile-border);
+  padding: 24px 12px 16px;
+  cursor: pointer;
+  color: var(--ink-primary);
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
 }
+.radio-tile:active { background: var(--bg-deep); }
 
-.spacer { flex: 1; }
-
-/* HOME grid ───────────────────────────────────────────────────── */
-.home-grid {
-    flex: 1;
-    padding: 32px 48px;
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    grid-auto-rows: 1fr;
-    gap: 16px;
-    overflow-y: auto;
-    z-index: 1;
+.radio-tile__sigil {
+  width: 48px;
+  height: 48px;
+  color: var(--ink-secondary);
+  margin-bottom: 12px;
 }
+.radio-tile__sigil > svg { width: 100%; height: 100%; }
 
-.tile {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    display: flex;
-    flex-direction: column;
-    justify-content: space-between;
-    cursor: pointer;
-    transition: border-color 120ms, background 120ms, transform 80ms;
-    position: relative;
-    overflow: hidden;
-    min-height: 110px;
+.radio-tile__label {
+  font: 700 11px/1.2 'Jost';
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-primary);
+  margin-bottom: 16px;
 }
-.tile:hover {
-    border-color: var(--border-strong);
-    background: var(--bg-raised);
+.radio-tile__status {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary);
 }
-.tile:active { transform: scale(0.99); }
-
-.tile .tile-top {
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
+.radio-tile__summary {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary);
+  margin-top: 4px;
 }
 
-.tile .tile-glyph {
-    font-size: 26px;
-    color: var(--text-2);
-    line-height: 1;
-}
+.radio-tile--active { border-color: var(--accent-active); }
+.radio-tile--active .radio-tile__sigil { color: var(--accent-active); }
+.radio-tile--active .radio-tile__status { color: var(--ink-primary); }
 
-.tile .tile-count {
-    font-size: 11px;
-    color: var(--text-3);
-    font-variant-numeric: tabular-nums;
+.radio-tile--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  border-style: dashed;
 }
+.radio-tile--disabled .radio-tile__sigil,
+.radio-tile--disabled .radio-tile__label { color: var(--ink-quiet); }
 
-.tile .tile-label {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text);
-    margin-top: 8px;
-}
+.radio-tile--error { border-color: var(--accent-crimson); }
+.radio-tile--error .radio-tile__sigil,
+.radio-tile--error .radio-tile__status { color: var(--accent-crimson); }
 
-.tile .tile-sub {
-    font-size: 12px;
-    color: var(--text-3);
-    margin-top: 2px;
-}
+/* Sigil utility (sigil spec §3) */
+.sigil { width: 48px; height: 48px; display: inline-block; }
+.sigil > svg { width: 100%; height: 100%; }
 
-/* Ask-Faust tile is visually distinguished */
-.tile.tile-ai {
-    grid-column: span 2;
-    background: linear-gradient(135deg, rgba(10, 132, 255, 0.10), rgba(10, 132, 255, 0.02));
-    border-color: rgba(10, 132, 255, 0.35);
-}
-.tile.tile-ai:hover { border-color: var(--blue); }
-.tile.tile-ai .tile-glyph { color: var(--blue); font-size: 30px; }
+/* ──────────────────────────────────────────────────────────────
+   §7.12 — body.active breathing-glow hook (preserved, empty)
+   ────────────────────────────────────────────────────────────── */
 
-body.mephisto-on .tile-ai {
-    background: linear-gradient(135deg, rgba(255, 69, 58, 0.12), rgba(255, 69, 58, 0.02));
-    border-color: rgba(255, 69, 58, 0.35);
+body.active {
+  /* Reserved for ambient glow layer; intentionally empty in Stage 1. */
 }
-body.mephisto-on .tile-ai:hover { border-color: var(--red); }
-body.mephisto-on .tile-ai .tile-glyph { color: var(--red); }
-
-.tile.tile-ai.disabled {
-    opacity: 0.45;
-    cursor: not-allowed;
-}
-
-/* CATEGORY ─── skill list ─────────────────────────────────────── */
-.skill-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px 48px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    z-index: 1;
-}
-
-.skill-row {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px 20px;
-    display: grid;
-    grid-template-columns: 1fr auto;
-    gap: 16px;
-    cursor: pointer;
-    transition: border-color 120ms, background 120ms;
-    align-items: center;
-}
-.skill-row:hover { border-color: var(--border-strong); background: var(--bg-raised); }
-
-.skill-row .skill-head {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 4px;
-}
-.skill-row .skill-name {
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text);
-}
-.skill-row .skill-desc {
-    font-size: 13px;
-    color: var(--text-2);
-    line-height: 1.5;
-}
-
-/* SKILL detail / params form ──────────────────────────────────── */
-.skill-detail {
-    flex: 1;
-    overflow-y: auto;
-    padding: 32px 48px 16px;
-    z-index: 1;
-}
-
-.skill-description {
-    color: var(--text-2);
-    font-size: 14px;
-    line-height: 1.55;
-    max-width: 820px;
-    margin-bottom: 28px;
-}
-
-.params-form {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px 24px;
-    max-width: 900px;
-}
-
-.params-form .params-empty {
-    grid-column: 1 / -1;
-    padding: 24px;
-    text-align: center;
-    color: var(--text-3);
-    border: 1px dashed var(--border);
-    border-radius: var(--radius);
-}
-
-.form-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-.form-field.full { grid-column: 1 / -1; }
-
-.form-field label {
-    font-size: 12px;
-    color: var(--text-3);
-    font-weight: 500;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-.form-field label .req {
-    color: var(--blue);
-    margin-left: 4px;
-}
-
-.form-field input,
-.form-field select {
-    background: var(--bg-field);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 12px 14px;
-    color: var(--text);
-    font-size: 14px;
-    outline: none;
-    transition: border-color 120ms, background 120ms;
-    font-family: "SF Mono", Menlo, monospace;
-}
-.form-field input:focus,
-.form-field select:focus {
-    border-color: var(--blue);
-    background: var(--bg-card);
-}
-
-.form-field .hint {
-    font-size: 12px;
-    color: var(--text-3);
-    line-height: 1.45;
-}
-
-/* Skill result area */
-.skill-result {
-    margin-top: 32px;
-    max-width: 900px;
-}
-.skill-result:empty { display: none; }
-
-.result-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 16px 18px;
-    margin-bottom: 8px;
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 12.5px;
-    line-height: 1.55;
-    color: var(--text-2);
-}
-.result-card.error { border-color: rgba(255, 69, 58, 0.5); color: var(--red); }
-.result-card.success-border { border-color: rgba(48, 209, 88, 0.35); }
-
-.result-card pre {
-    white-space: pre-wrap;
-    word-break: break-word;
-    max-height: 280px;
-    overflow-y: auto;
-    margin: 0;
-}
-
-/* CHAT ────────────────────────────────────────────────────────── */
-.chat-messages {
-    flex: 1;
-    overflow-y: auto;
-    padding: 24px 48px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    z-index: 1;
-}
-
-.chat-empty {
-    margin: auto;
-    color: var(--text-3);
-    font-size: 14px;
-    max-width: 480px;
-    text-align: center;
-    line-height: 1.55;
-}
-
-.chat-msg {
-    max-width: 760px;
-    padding: 12px 16px;
-    border-radius: var(--radius);
-    font-size: 14px;
-    line-height: 1.5;
-    animation: slide-up 0.2s ease-out;
-}
-.chat-msg.user {
-    align-self: flex-end;
-    background: var(--blue);
-    color: white;
-}
-body.mephisto-on .chat-msg.user { background: var(--red); }
-
-.chat-msg.assistant {
-    align-self: flex-start;
-    background: var(--bg-card);
-    color: var(--text);
-    border: 1px solid var(--border);
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.chat-msg.tool-proposed,
-.chat-msg.tool-executed,
-.chat-msg.plan-proposed,
-.chat-msg.final {
-    align-self: flex-start;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    max-width: 760px;
-    font-family: "SF Mono", Menlo, monospace;
-    font-size: 12.5px;
-    color: var(--text-2);
-}
-
-.chat-msg.tool-executed.error { border-color: rgba(255, 69, 58, 0.5); }
-
-.chat-msg .chat-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 4px;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    color: var(--text-3);
-}
-
-.chat-input-bar {
-    height: var(--bar-h);
-    padding: 0 24px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    border-top: 1px solid var(--border);
-    background: rgba(0, 0, 0, 0.4);
-}
-
-#chat-input {
-    flex: 1;
-    height: var(--touch-min);
-    background: var(--bg-field);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 16px;
-    font-size: 14px;
-    outline: none;
-    transition: border-color 120ms, opacity 120ms;
-}
-#chat-input:focus { border-color: var(--blue); }
-#chat-input:disabled { opacity: 0.4; }
-
-/* MODAL (shared for confirmation + plan approval) ─────────────── */
-.modal {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.65);
-    backdrop-filter: blur(20px);
-    z-index: 1000;
-    align-items: center;
-    justify-content: center;
-    padding: 80px;
-}
-.modal.visible { display: flex; animation: modal-in 0.18s ease-out; }
-
-@keyframes modal-in {
-    from { opacity: 0; transform: scale(0.98); }
-    to   { opacity: 1; transform: scale(1); }
-}
-@keyframes slide-up {
-    from { opacity: 0; transform: translateY(6px); }
-    to   { opacity: 1; transform: translateY(0); }
-}
-
-.modal-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--radius);
-    padding: 28px 28px 20px;
-    max-width: 640px;
-    width: 100%;
-}
-
-.modal-title {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 12px;
-}
-
-.modal-body {
-    color: var(--text-2);
-    font-size: 13px;
-    line-height: 1.55;
-    max-height: 280px;
-    overflow-y: auto;
-    margin-bottom: 24px;
-    font-family: "SF Mono", Menlo, monospace;
-    white-space: pre-wrap;
-    word-break: break-word;
-}
-
-.modal-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 10px;
-}
-
-.modal.disruptive .modal-card { border-color: rgba(255, 69, 58, 0.5); }
-.modal.disruptive .btn-primary { background: var(--red); }
-
-/* Scrollbars ─────────────────────────────────────────────────── */
-::-webkit-scrollbar         { width: 4px; height: 4px; }
-::-webkit-scrollbar-track   { background: transparent; }
-::-webkit-scrollbar-thumb   { background: var(--border-strong); border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }

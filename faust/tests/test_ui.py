@@ -41,7 +41,8 @@ async def test_static_files_served():
             # CSS.
             r = await client.get(f"http://localhost:{PORT}/style.css")
             assert r.status_code == 200
-            assert "--bg:" in r.text  # our primary background variable
+            assert "--bg-primary" in r.text  # semantic bg alias (spec §4.1)
+            assert "--accent-crimson" in r.text  # Goethe palette accent
             print(f"  GET /style.css → {r.status_code}")
 
             # JS.
