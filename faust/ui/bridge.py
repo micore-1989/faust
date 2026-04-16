@@ -26,6 +26,13 @@ from ..agent.events import (
     ParameterizingStep,
     PlanningStarted,
 )
+from ..pursuits.events import (
+    PursuitActivity,
+    PursuitComplete,
+    PursuitProgress,
+    PursuitStarted,
+    PursuitStopped,
+)
 
 
 class EventBridge:
@@ -89,6 +96,42 @@ def _event_to_dict(event: Event) -> dict[str, Any] | None:
         }
     if isinstance(event, ParameterizingDone):
         return None
+
+    # ── Pursuit events (§10.4) ────────────────────────────────
+    if isinstance(event, PursuitStarted):
+        # Internal: client learns via the next `state` push; spec §2.4
+        # does not define a wire message for this.
+        return None
+    if isinstance(event, PursuitProgress):
+        return {
+            "type": "pursuit_progress",
+            "pursuit_id": event.pursuit_id,
+            "progress": event.progress,
+            "elapsed_s": event.elapsed_s,
+            "eta_s": event.eta_s,
+        }
+    if isinstance(event, PursuitActivity):
+        return {
+            "type": "pursuit_activity",
+            "pursuit_id": event.pursuit_id,
+            "line": event.line,
+        }
+    if isinstance(event, PursuitStopped):
+        return {
+            "type": "pursuit_stopped",
+            "pursuit_id": event.pursuit_id,
+            "reason": event.reason,
+            "error": event.error,
+        }
+    if isinstance(event, PursuitComplete):
+        return {
+            "type": "pursuit_complete",
+            "pursuit_id": event.pursuit_id,
+            "summary": event.summary,
+            "journal_entry_id": event.journal_entry_id,
+            "artifacts": list(event.artifacts),
+        }
+
     d = asdict(event)
     # asdict handles nested dataclasses. We just need to ensure
     # everything is JSON-serializable.

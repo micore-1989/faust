@@ -31,13 +31,24 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
 from aiohttp import web
 
+from ..pursuits.registry import apply_defaults, get_pursuit, validate_params
+from ..pursuits.runner import run_pursuit
 from .bridge import EventBridge
-from .state import BOOT_DURATION_MS, BOOT_LOG, Mephisto, Power, SimulatorState
+from .state import (
+    BOOT_DURATION_MS,
+    BOOT_LOG,
+    Mephisto,
+    Power,
+    PursuitRunMeta,
+    SimulatorState,
+)
 
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -75,6 +86,11 @@ class UIServer:
         # and journal the transition. Both optional for dev/test setups.
         self._trust_cache: Any = None
         self._journal: Any = None
+        # Wired by run.py for pursuit_start handling. Dispatcher runs inside
+        # the Pursuit implementation; storage records the terminal result.
+        self._dispatcher: Any = None
+        self._pursuit_storage: Any = None
+        self._pursuit_implementations: dict[str, Any] | None = None
         self._boot_task: asyncio.Task | None = None
         # Long-running handlers (prompt, dispatch) must not block the WS
         # receive loop — otherwise plan_approval / confirmation messages
@@ -132,6 +148,20 @@ class UIServer:
         dev/test environments."""
         self._trust_cache = trust_cache
         self._journal = journal
+
+    def set_pursuits(
+        self,
+        dispatcher: Any = None,
+        storage: Any = None,
+        implementations: dict[str, Any] | None = None,
+    ) -> None:
+        """Install the server-side pursuit dependencies needed by the
+        pursuit_start handler. Tests inject a fake dispatcher + stub
+        storage + their own implementations dict; production wiring in
+        run.py passes the real dispatcher and PursuitStorage."""
+        self._dispatcher = dispatcher
+        self._pursuit_storage = storage
+        self._pursuit_implementations = implementations
 
     def set_skills_catalog(self, skills: list[dict[str, Any]]) -> None:
         """Installed by the runner after loading skills. Sent to clients
@@ -257,6 +287,104 @@ class UIServer:
 
         await self._broadcast_state()
 
+    # ── Pursuit management ────────────────────────────────────────
+
+    async def _handle_pursuit_start(self, payload: dict[str, Any]) -> None:
+        """Validate a pursuit_start payload and spawn the Pursuit runner as
+        a background task.
+
+        The task is backgrounded at the receive-loop level (same pattern as
+        prompt/dispatch) so the loop stays free to process pursuit_stop and
+        confirmation messages while the Pursuit is running — otherwise the
+        stop message could never arrive. Guarded by
+        test_pursuit_start_background_task_does_not_block_receive_loop.
+        """
+        pursuit_id = payload.get("pursuit_id", "")
+        raw_params = payload.get("params", {}) or {}
+
+        try:
+            pursuit = get_pursuit(pursuit_id)
+        except KeyError:
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": f"unknown pursuit: {pursuit_id!r}",
+            })
+            return
+
+        errors = validate_params(pursuit, raw_params)
+        if errors:
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": "invalid pursuit params: " + "; ".join(errors),
+            })
+            return
+
+        if self._dispatcher is None:
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": "pursuit subsystem not wired on this server",
+            })
+            return
+
+        merged = apply_defaults(pursuit, raw_params)
+        run_id = uuid.uuid4().hex
+        stop_event = asyncio.Event()
+
+        meta = PursuitRunMeta(
+            run_id=run_id,
+            pursuit_id=pursuit_id,
+            started_at=time.time(),
+            stop_event=stop_event,
+        )
+        self.state.active_pursuits[run_id] = meta
+
+        async def _runner_coro() -> None:
+            try:
+                await run_pursuit(
+                    pursuit,
+                    merged,
+                    self._dispatcher,
+                    self.bridge,
+                    stop_event,
+                    run_id=run_id,
+                    implementations=self._pursuit_implementations,
+                    journal=self._journal,
+                    storage=self._pursuit_storage,
+                )
+            finally:
+                # Pruning the active-pursuit entry happens here rather than
+                # in a task.add_done_callback so the state is consistent
+                # *before* the task reports done.
+                self.state.active_pursuits.pop(run_id, None)
+
+        meta.task = self._spawn_background(_runner_coro())
+        await self._broadcast_state()
+
+    async def _handle_pursuit_stop(self, payload: dict[str, Any]) -> None:
+        """Find the active run by pursuit_id (or run_id) and signal its
+        stop_event. If no match, reply with an error."""
+        pursuit_id = payload.get("pursuit_id")
+        run_id = payload.get("run_id")
+
+        target: PursuitRunMeta | None = None
+        if run_id:
+            target = self.state.active_pursuits.get(run_id)
+        if target is None and pursuit_id:
+            # Stop the newest run of that pursuit_id.
+            for meta in reversed(list(self.state.active_pursuits.values())):
+                if meta.pursuit_id == pursuit_id:
+                    target = meta
+                    break
+
+        if target is None or target.stop_event is None:
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": f"no active pursuit to stop: {pursuit_id or run_id!r}",
+            })
+            return
+
+        target.stop_event.set()
+
     # ── WebSocket handler ──────────────────────────────────────────
 
     async def _ws_handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -294,7 +422,7 @@ class UIServer:
                 # dispatch them as background tasks to avoid deadlock. Fast
                 # message types (power, mephisto, confirmation, plan_approval)
                 # keep inline ordering.
-                if payload.get("type") in ("prompt", "dispatch"):
+                if payload.get("type") in ("prompt", "dispatch", "pursuit_start"):
                     self._spawn_background(self._handle_incoming(payload))
                 else:
                     await self._handle_incoming(payload)
@@ -347,6 +475,12 @@ class UIServer:
 
         elif mtype == "scope_change":
             await self._handle_scope_change(payload)
+
+        elif mtype == "pursuit_start":
+            await self._handle_pursuit_start(payload)
+
+        elif mtype == "pursuit_stop":
+            await self._handle_pursuit_stop(payload)
 
         elif mtype == "confirmation":
             await self._confirmation_queue.put(payload)

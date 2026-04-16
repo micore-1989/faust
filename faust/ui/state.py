@@ -17,6 +17,7 @@ regardless of how many touchscreens are attached (in practice only one).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal, Optional
@@ -61,6 +62,28 @@ class BatteryState:
 
 
 @dataclass
+class PursuitRunMeta:
+    """Lightweight bookkeeping for an in-flight Pursuit run.
+
+    The task and stop_event are kept in-memory for lifecycle control and
+    are intentionally excluded from `to_dict()` — WebSocket clients only
+    see the public fields.
+    """
+    run_id: str
+    pursuit_id: str
+    started_at: float
+    stop_event: Optional[asyncio.Event] = None
+    task: Optional[asyncio.Task] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "pursuit_id": self.pursuit_id,
+            "started_at": self.started_at,
+        }
+
+
+@dataclass
 class SimulatorState:
     power: Power = Power.OFF
     mephisto: Mephisto = Mephisto.DISCONNECTED
@@ -71,6 +94,9 @@ class SimulatorState:
     # Gates the first-dock ceremony (§10.13). True on boot; the server
     # clears it after the first CONNECTED transition broadcasts.
     first_dock_this_boot: bool = True
+    # Pursuit runs in flight, keyed by run_id. Populated by the pursuit_start
+    # handler and pruned when the run task completes or is stopped.
+    active_pursuits: dict[str, PursuitRunMeta] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -81,6 +107,9 @@ class SimulatorState:
             "scope": self.scope.to_dict(),
             "battery": self.battery.to_dict(),
             "first_dock_this_boot": self.first_dock_this_boot,
+            "active_pursuits": [
+                m.to_dict() for m in self.active_pursuits.values()
+            ],
         }
 
     def can_accept_prompt(self) -> bool:

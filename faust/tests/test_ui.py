@@ -343,6 +343,245 @@ async def test_scope_change_rejects_pentesting_without_description():
     print("✓ scope_change validates template + required description")
 
 
+async def test_pursuit_start_message_spawns_background_task():
+    """pursuit_start hands off to a background task so the runner can
+    operate asynchronously without blocking the server's receive loop."""
+    import aiohttp
+    import json as _json
+    import tempfile
+    from pathlib import Path
+    from faust.pursuits.models import Pursuit, ParamSpec, PursuitYield, PursuitResultPartial
+    from faust.pursuits.registry import PURSUITS
+    from faust.pursuits.storage import PursuitStorage
+
+    PORT_LOCAL = PORT + 10
+    bridge = EventBridge()
+    server = UIServer(bridge, port=PORT_LOCAL)
+
+    # Register a test pursuit that signals start + completion quickly.
+    test_pursuit = Pursuit(
+        id="_test_fast_pursuit",
+        title="Fast Test Pursuit", description="quick", duration_hint="0",
+        tools_used=[], parameters=[],
+    )
+    PURSUITS[test_pursuit.id] = test_pursuit
+
+    async def fast_impl(params, dispatcher, stop_event):
+        yield PursuitYield(progress=0.5, activity="halfway")
+        yield PursuitYield(progress=1.0)
+        yield PursuitResultPartial(summary="done")
+
+    class _Disp:
+        async def dispatch(self, tool, args):
+            return {"executed": True}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = PursuitStorage(path=Path(tmp) / "p.jsonl")
+        server.set_pursuits(
+            dispatcher=_Disp(),
+            storage=storage,
+            implementations={test_pursuit.id: fast_impl},
+        )
+
+        await server.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(f"http://localhost:{PORT_LOCAL}/ws") as ws:
+                    await asyncio.wait_for(ws.receive(), timeout=1.0)  # drain state
+                    await ws.send_str(_json.dumps({
+                        "type": "pursuit_start",
+                        "pursuit_id": test_pursuit.id,
+                        "params": {},
+                    }))
+                    # Drain messages until we see a pursuit_complete.
+                    saw_complete = False
+                    for _ in range(30):
+                        raw = await asyncio.wait_for(ws.receive(), timeout=2.0)
+                        if raw.type != aiohttp.WSMsgType.TEXT:
+                            continue
+                        msg = _json.loads(raw.data)
+                        if msg.get("type") == "pursuit_complete":
+                            saw_complete = True
+                            break
+                    assert saw_complete, "client should observe pursuit_complete"
+        finally:
+            await server.stop()
+            PURSUITS.pop(test_pursuit.id, None)
+    print("✓ pursuit_start spawns bg task; client sees pursuit_complete")
+
+
+async def test_pursuit_start_background_task_does_not_block_receive_loop():
+    """The Pursuits analog of the prompt deadlock guard: a long-running
+    Pursuit must not block the receive loop from processing pursuit_stop."""
+    import aiohttp
+    import json as _json
+    import tempfile
+    from pathlib import Path
+    from faust.pursuits.models import Pursuit, PursuitYield, PursuitResultPartial
+    from faust.pursuits.registry import PURSUITS
+    from faust.pursuits.storage import PursuitStorage
+
+    PORT_LOCAL = PORT + 11
+    bridge = EventBridge()
+    server = UIServer(bridge, port=PORT_LOCAL)
+
+    test_pursuit = Pursuit(
+        id="_test_blocking_pursuit",
+        title="Blocking Test Pursuit", description="long-running",
+        duration_hint="∞", tools_used=[], parameters=[],
+    )
+    PURSUITS[test_pursuit.id] = test_pursuit
+
+    stopped_cleanly = asyncio.Event()
+
+    async def blocking_impl(params, dispatcher, stop_event):
+        # Simulate a real Pursuit's loop: yield a progress tick then wait.
+        yield PursuitYield(progress=0.1, activity="started, waiting")
+        try:
+            # Wait for stop — yield occasionally so the runner can check.
+            for _ in range(100):
+                await asyncio.sleep(0.02)
+                yield PursuitYield(progress=0.2, activity="tick")
+            yield PursuitResultPartial(summary="should not finish naturally")
+        finally:
+            stopped_cleanly.set()
+
+    class _Disp:
+        async def dispatch(self, tool, args):
+            return {"executed": True}
+
+    with tempfile.TemporaryDirectory() as tmp:
+        storage = PursuitStorage(path=Path(tmp) / "p.jsonl")
+        server.set_pursuits(
+            dispatcher=_Disp(),
+            storage=storage,
+            implementations={test_pursuit.id: blocking_impl},
+        )
+
+        await server.start()
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(f"http://localhost:{PORT_LOCAL}/ws") as ws:
+                    await asyncio.wait_for(ws.receive(), timeout=1.0)  # drain state
+
+                    await ws.send_str(_json.dumps({
+                        "type": "pursuit_start",
+                        "pursuit_id": test_pursuit.id,
+                        "params": {},
+                    }))
+                    # Let the task get going.
+                    await asyncio.sleep(0.1)
+
+                    # THIS is the invariant under test: the receive loop
+                    # must still process pursuit_stop while the bg task
+                    # is running.
+                    await ws.send_str(_json.dumps({
+                        "type": "pursuit_stop",
+                        "pursuit_id": test_pursuit.id,
+                    }))
+
+                    # The impl's finally-block runs when the runner aclose's
+                    # the generator. If the receive loop were blocked, stop
+                    # would never arrive and this event would never set.
+                    await asyncio.wait_for(stopped_cleanly.wait(), timeout=3.0)
+        finally:
+            await server.stop()
+            PURSUITS.pop(test_pursuit.id, None)
+    print("✓ pursuit_start bg task does not block receive loop (stop delivered)")
+
+
+async def test_pursuit_stop_signals_run():
+    """pursuit_stop finds the active run and sets its stop_event."""
+    from faust.pursuits.registry import PURSUITS
+    from faust.pursuits.models import Pursuit
+    from faust.ui.state import PursuitRunMeta, Power
+
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    server.state.power = Power.ON
+
+    # Pretend there's an active run with a stop event.
+    stop_ev = asyncio.Event()
+    meta = PursuitRunMeta(
+        run_id="run-abc",
+        pursuit_id="wardrive",
+        started_at=1.0,
+        stop_event=stop_ev,
+    )
+    server.state.active_pursuits[meta.run_id] = meta
+
+    await server._handle_incoming({
+        "type": "pursuit_stop",
+        "pursuit_id": "wardrive",
+    })
+    assert stop_ev.is_set()
+    print("✓ pursuit_stop trips the matching run's stop_event")
+
+
+async def test_pursuit_start_validates_params_against_pursuit_spec():
+    """Invalid params (wrong enum, wrong type) surface as an error
+    message and do NOT spawn a runner task."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    q = bridge.subscribe()
+
+    class _Disp:
+        async def dispatch(self, tool, args):
+            raise AssertionError("should not be reached")
+
+    server.set_pursuits(dispatcher=_Disp(), storage=None, implementations={})
+
+    # Invalid enum value for wardrive.
+    await server._handle_incoming({
+        "type": "pursuit_start",
+        "pursuit_id": "wardrive",
+        "params": {"frequency_band": "bogus"},
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+    assert "invalid pursuit params" in msg["message"]
+    assert server.state.active_pursuits == {}
+
+    # Wrong type for int param.
+    await server._handle_incoming({
+        "type": "pursuit_start",
+        "pursuit_id": "wardrive",
+        "params": {"duration_minutes": "thirty"},
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+    assert server.state.active_pursuits == {}
+
+    bridge.unsubscribe(q)
+    print("✓ pursuit_start validates params before spawning runner")
+
+
+async def test_pursuit_start_rejects_unknown_pursuit_id():
+    """Unknown pursuit_id produces an error message and spawns nothing."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    q = bridge.subscribe()
+
+    class _Disp:
+        async def dispatch(self, tool, args):
+            raise AssertionError("should not be reached")
+
+    server.set_pursuits(dispatcher=_Disp(), storage=None, implementations={})
+
+    await server._handle_incoming({
+        "type": "pursuit_start",
+        "pursuit_id": "totally-fake",
+        "params": {},
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+    assert "unknown pursuit" in msg["message"]
+    assert server.state.active_pursuits == {}
+
+    bridge.unsubscribe(q)
+    print("✓ pursuit_start rejects unknown pursuit_id")
+
+
 async def test_prompt_handler_does_not_deadlock_on_approval():
     """Regression: the WS receive loop must stay free while a prompt
     handler is awaiting plan_approval. Otherwise the approval message
@@ -416,6 +655,11 @@ async def main():
     await test_scope_change_creates_journal_entry()
     await test_scope_change_invalidates_trust()
     await test_scope_change_rejects_pentesting_without_description()
+    await test_pursuit_start_rejects_unknown_pursuit_id()
+    await test_pursuit_start_validates_params_against_pursuit_spec()
+    await test_pursuit_stop_signals_run()
+    await test_pursuit_start_message_spawns_background_task()
+    await test_pursuit_start_background_task_does_not_block_receive_loop()
     await test_prompt_handler_does_not_deadlock_on_approval()
     print("\nall UI tests passed")
 
