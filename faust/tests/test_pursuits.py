@@ -470,15 +470,29 @@ async def test_storage_roundtrip_preserves_fields():
     print("✓ storage roundtrip preserves all fields")
 
 
-# ── Safety: IMPLEMENTATIONS stays empty after 5a ────────────────
+# ── Safety: IMPLEMENTATIONS populated after 5b ──────────────────
 
-async def test_implementations_dict_empty_in_stage_5a():
-    """Stage 5a leaves IMPLEMENTATIONS empty — Stage 5b fills it. If this
-    test fails, either 5b has landed (and this assertion needs updating)
-    or something in 5a leaked a real impl into the module-level dict."""
-    # Copy to guard against parallel-test pollution.
-    assert dict(IMPLEMENTATIONS) == {}
-    print("✓ IMPLEMENTATIONS empty in stage 5a")
+async def test_implementations_dict_registers_seven_real_pursuits():
+    """Stage 5b must register a callable for each of the seven v1
+    Pursuits. `custom` stays absent — Stage 11 builds that."""
+    expected = {
+        "wardrive",
+        "clone-credential",
+        "replay-subghz",
+        "evil-portal",
+        "bluetooth-recon",
+        "subghz-capture-analyze",
+        "hmc-demo",
+    }
+    assert expected.issubset(IMPLEMENTATIONS.keys()), (
+        f"missing: {expected - set(IMPLEMENTATIONS.keys())}"
+    )
+    assert "custom" not in IMPLEMENTATIONS, (
+        "custom Pursuit should NOT be registered until Stage 11"
+    )
+    for pid in expected:
+        assert callable(IMPLEMENTATIONS[pid])
+    print("✓ IMPLEMENTATIONS registers seven real Pursuits (custom excluded)")
 
 
 async def main():
@@ -505,7 +519,7 @@ async def main():
     await test_storage_get_by_run_id()
     await test_storage_roundtrip_preserves_fields()
 
-    await test_implementations_dict_empty_in_stage_5a()
+    await test_implementations_dict_registers_seven_real_pursuits()
 
     print("\nall pursuit tests passed")
 

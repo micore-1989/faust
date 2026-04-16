@@ -126,9 +126,30 @@ PURSUITS: dict[str, Pursuit] = {
 }
 
 
-# Stage 5b fills this in. Runner raises / emits PursuitStopped(error) if
-# the lookup misses. Tests inject their own callables here (with cleanup).
-IMPLEMENTATIONS: dict[str, Callable] = {}
+# Stage 5b filled these in. Runner emits PursuitStopped(error) if the
+# lookup misses. Tests inject their own callables via the `implementations`
+# parameter on run_pursuit rather than mutating this dict.
+from .pursuits import (  # noqa: E402
+    bluetooth_recon,
+    clone_credential,
+    evil_portal,
+    hmc_demo,
+    replay_subghz,
+    subghz_capture_analyze,
+    wardrive,
+)
+
+
+IMPLEMENTATIONS: dict[str, Callable] = {
+    "wardrive": wardrive.run,
+    "clone-credential": clone_credential.run,
+    "replay-subghz": replay_subghz.run,
+    "evil-portal": evil_portal.run,
+    "bluetooth-recon": bluetooth_recon.run,
+    "subghz-capture-analyze": subghz_capture_analyze.run,
+    "hmc-demo": hmc_demo.run,
+    # "custom" intentionally absent — Stage 11 builder.
+}
 
 
 # Canonical display order — 7 real Pursuits first, Custom last. The UI
