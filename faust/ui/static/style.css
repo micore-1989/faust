@@ -294,47 +294,55 @@ button {
 }
 
 /* ──────────────────────────────────────────────────────────────
-   §7.10 — Modal
+   §7.10 — Modal (replaced by Stage 9 — kept at the original offset
+   so spec §7.10 hits the right rules on grep)
    ────────────────────────────────────────────────────────────── */
 
 .modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background: var(--modal-backdrop);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  position: fixed; inset: 0;
+  background: rgba(62, 46, 70, 0.7);
+  display: flex; align-items: center; justify-content: center;
   z-index: 100;
+  opacity: 0; transition: opacity 150ms ease-out;
 }
+body[data-mode="pact"] .modal-backdrop {
+  background: rgba(66, 2, 3, 0.7);
+}
+.modal-backdrop--visible { opacity: 1; }
 .modal {
   background: var(--bg-secondary);
   border: 1px solid var(--accent-crimson);
-  width: 60%;
-  max-width: 640px;
+  width: 60%; max-width: 640px;
+  max-height: 80vh; display: flex; flex-direction: column;
 }
+.modal--disconnected { opacity: 0.5; }
 .modal__header {
-  background: var(--accent-crimson);
-  color: var(--ink-primary);
   padding: 14px 24px;
   font: 900 22px/1 'Jost';
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
+  letter-spacing: 0.02em; text-transform: uppercase;
 }
-.modal__body { padding: 24px; }
+.modal__header--destructive { background: var(--accent-crimson); color: var(--ink-primary); }
+.modal__header--plan       { background: var(--accent-thinking); color: var(--ink-primary); }
+.modal__header--replan     { background: var(--accent-crimson);  color: var(--ink-primary); }
+.modal__header--scope      { background: var(--accent-crimson);  color: var(--ink-primary); }
+.modal__body { padding: 24px; overflow-y: auto; flex: 1; }
 .modal__buttons {
-  display: flex;
-  border-top: 0.5px solid var(--tile-border);
+  display: flex; border-top: 0.5px solid var(--tile-border);
 }
 .modal__buttons > button {
-  flex: 1;
-  border: none;
-  padding: 18px 24px;
+  flex: 1; border: none; padding: 18px 24px;
   font: 700 13px/1.4 'Jost';
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-  cursor: pointer;
-  background: transparent;
-  color: var(--ink-primary);
+  letter-spacing: 0.22em; text-transform: uppercase;
+  cursor: pointer; background: transparent; color: var(--ink-secondary);
+}
+.modal__buttons > button:active { background: var(--bg-deep); }
+.modal__btn-confirm         { background: var(--accent-crimson) !important;  color: var(--ink-primary) !important; }
+.modal__btn-confirm--plan   { background: var(--accent-thinking) !important; color: var(--ink-primary) !important; }
+.modal__btn-confirm--replan { background: var(--accent-crimson) !important;  color: var(--ink-primary) !important; }
+.modal__btn-confirm:disabled,
+.modal__btn-confirm--plan:disabled,
+.modal__btn-confirm--replan:disabled {
+  opacity: 0.4; cursor: not-allowed;
 }
 
 /* ──────────────────────────────────────────────────────────────
@@ -849,4 +857,91 @@ body[data-mode="pact"] .session-info__pact-body--has-text { color: var(--accent-
 .parameter-form__actions {
   display: flex; gap: 12px; justify-content: flex-end;
   margin-top: 32px;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 9 — modal body helpers (spec §10.8 / §10.9 / §10.10)
+   ────────────────────────────────────────────────────────────── */
+
+.modal__section-title {
+  font: 700 18px/1.2 'Jost';
+  letter-spacing: -0.005em;
+  margin: 16px 0 8px;
+  color: var(--ink-primary);
+}
+.modal__section-title:first-child { margin-top: 0; }
+
+.modal__consequence {
+  font: 400 14px/1.5 'Jost';
+  color: var(--ink-primary);
+  margin: 12px 0;
+}
+.modal__scope-line {
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-tertiary);
+  margin-top: 12px;
+}
+.modal__scope-line strong {
+  color: var(--accent-scope);
+  font-weight: 400;
+}
+.modal__trust-line {
+  font: 400 10px/1.4 'JetBrains Mono';
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+  margin-top: 6px;
+}
+
+.plan-steps {
+  list-style: none;
+  padding: 0; margin: 0;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.plan-steps__row {
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary);
+  display: grid;
+  grid-template-columns: 24px auto 1fr;
+  gap: 8px; align-items: baseline;
+}
+.plan-steps__n     { color: var(--ink-tertiary); }
+.plan-steps__skill { color: var(--ink-primary); }
+.plan-steps__critical { color: var(--accent-crimson); }
+.plan-steps__intent { color: var(--ink-secondary); }
+
+.plan-safety-notes {
+  display: flex; flex-direction: column; gap: 4px;
+  margin: 0; padding: 0;
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary);
+}
+.plan-safety-notes__row { display: flex; gap: 8px; }
+.plan-safety-notes__icon { color: var(--accent-scope); }
+
+.scope-options { display: flex; flex-direction: column; gap: 16px; margin: 16px 0; }
+.scope-radio {
+  display: flex; gap: 12px; align-items: flex-start;
+  cursor: pointer;
+}
+.scope-radio__box {
+  width: 16px; height: 16px; min-width: 16px;
+  border: 1px solid var(--ink-secondary);
+  margin-top: 2px;
+}
+.scope-radio__box--selected {
+  background: var(--accent-crimson);
+  border-color: var(--accent-crimson);
+}
+.scope-radio__info { display: flex; flex-direction: column; gap: 4px; }
+.scope-radio__title { font: 500 14px/1.4 'Jost'; color: var(--ink-primary); }
+.scope-radio__desc  { font: 400 12px/1.5 'Jost'; color: var(--ink-secondary); }
+.scope-description-input {
+  width: 100%; height: 48px;
+  font: 400 13px/1.6 'JetBrains Mono';
+  color: var(--ink-primary);
+  background: var(--bg-deep);
+  border: none; padding: 12px 16px;
+  outline: none; resize: none;
+  margin-top: 8px;
 }

@@ -156,6 +156,7 @@
     ws.onopen = () => {
       clearTimeout(reconnectTimer);
       console.log("[ws] open");
+      setModalDisconnected(false);
     };
     ws.onmessage = (e) => {
       try {
@@ -166,6 +167,7 @@
     };
     ws.onclose = () => {
       console.log("[ws] close — reconnecting in 1s");
+      setModalDisconnected(true);
       reconnectTimer = setTimeout(connect, 1000);
     };
     ws.onerror = (e) => { console.warn("[ws] error", e); };
@@ -240,23 +242,13 @@
         markViewDirty();
         break;
 
-      // ── Approval requests ──
-      // STAGE 6 AUTO-REJECT: auto-reject these after 2s so the server's
-      // queue-backed approvers don't hang while the real modals are still
-      // being built. MUST be removed in Stage 9 when UIConfirmationModal
-      // and UIPlanApprovalModal land.
+      // ── Approval requests (Stage 9 real modals) ──
       case "confirmation_request":
-        console.warn("[STAGE 6 AUTO-REJECT] confirmation_request", msg);
-        setTimeout(() => {
-          send({ type: "confirmation", call_id: msg.call_id, approved: false });
-        }, 2000);
+        enqueueOrOpenModal({ type: "confirmation", msg });
         break;
 
       case "plan_approval_request":
-        console.warn("[STAGE 6 AUTO-REJECT] plan_approval_request", msg);
-        setTimeout(() => {
-          send({ type: "plan_approval", plan_id: msg.plan_id, approved: false });
-        }, 2000);
+        enqueueOrOpenModal({ type: "plan", msg });
         break;
 
       // ── Pursuit events (Stage 11 renders) ──
@@ -1028,6 +1020,479 @@
     render();
   }
 
+  // ── Stage 9 — modals (spec §7.10 / §10.8 / §10.9 / §10.10) ───
+  //
+  // One modal visible at a time. Server-pushed approval requests
+  // (confirmation_request / plan_approval_request) that arrive while
+  // another modal is open queue behind it; a user-initiated scope
+  // modal bypasses the queue entirely (by design: the operator asked
+  // for it).  Correlation ids (call_id / plan_id) live on module
+  // state so the Escape key path can send the right reject payload
+  // without re-deriving it from the DOM.
+
+  let activeModalType = null; // 'confirmation' | 'plan' | 'scope' | null
+  let activeCallId = null;
+  let activePlanId = null;
+  const pendingModals = [];   // items: { type: 'confirmation' | 'plan', msg }
+  let modalKeydownHandler = null;
+
+  function enqueueOrOpenModal(item) {
+    // An already-open scope modal does NOT block server approvals in
+    // reality, but to preserve one-at-a-time we still queue behind it.
+    if (activeModalType !== null) {
+      // Drop exact-duplicate re-emits (same call_id/plan_id as active).
+      if (
+        (item.type === "confirmation" && activeCallId && activeCallId === item.msg.call_id) ||
+        (item.type === "plan"         && activePlanId && activePlanId === item.msg.plan_id)
+      ) return;
+      pendingModals.push(item);
+      return;
+    }
+    if (item.type === "confirmation") openDestructiveModal(item.msg);
+    else if (item.type === "plan")    openPlanApprovalModal(item.msg);
+  }
+
+  function openModal(backdropEl, type) {
+    activeModalType = type;
+    const root = document.getElementById("modal-root");
+    root.innerHTML = "";
+    root.appendChild(backdropEl);
+    requestAnimationFrame(() => backdropEl.classList.add("modal-backdrop--visible"));
+    modalKeydownHandler = (e) => {
+      if (e.key === "Escape") handleModalEscape();
+    };
+    document.addEventListener("keydown", modalKeydownHandler);
+  }
+
+  function closeModal() {
+    const root = document.getElementById("modal-root");
+    const backdrop = root.querySelector(".modal-backdrop");
+    const finalize = () => {
+      root.innerHTML = "";
+      activeModalType = null;
+      activeCallId = null;
+      activePlanId = null;
+      if (modalKeydownHandler) {
+        document.removeEventListener("keydown", modalKeydownHandler);
+        modalKeydownHandler = null;
+      }
+      // Drain the queue: the next queued item opens after this one.
+      if (pendingModals.length > 0) {
+        const next = pendingModals.shift();
+        if (next.type === "confirmation") openDestructiveModal(next.msg);
+        else if (next.type === "plan")    openPlanApprovalModal(next.msg);
+      }
+    };
+    if (backdrop) {
+      backdrop.classList.remove("modal-backdrop--visible");
+      setTimeout(finalize, 150);
+    } else {
+      finalize();
+    }
+  }
+
+  function handleModalEscape() {
+    if (activeModalType === "confirmation") {
+      send({ type: "confirmation", call_id: activeCallId, approved: false });
+      closeModal();
+    } else if (activeModalType === "plan") {
+      send({ type: "plan_approval", plan_id: activePlanId, approved: false });
+      closeModal();
+    } else if (activeModalType === "scope") {
+      closeModal();
+    }
+  }
+
+  function setModalDisconnected(disconnected) {
+    const modal = document.querySelector("#modal-root .modal");
+    if (!modal) return;
+    modal.classList.toggle("modal--disconnected", !!disconnected);
+  }
+
+  // ── Destructive-action confirmation modal (spec §10.8) ───────
+
+  const DESTRUCTIVE_TITLES = {
+    wifi_deauth:       "DEAUTH A WIFI CLIENT",
+    wifi_deauth_all:   "DEAUTH ALL WIFI CLIENTS",
+    wifi_evil_portal:  "LAUNCH EVIL PORTAL",
+    subghz_replay:     "REPLAY SUB-GHZ SIGNAL",
+    subghz_transmit:   "TRANSMIT ON SUB-GHZ",
+    subghz_jam:        "JAM SUB-GHZ BAND",
+    nfc_write:         "WRITE NFC TAG",
+    nfc_emulate:       "EMULATE NFC TAG",
+    rfid_clone:        "CLONE RFID CREDENTIAL",
+    rfid_write:        "WRITE RFID CARD",
+    ir_transmit:       "TRANSMIT IR",
+    ibutton_write:     "WRITE IBUTTON",
+    keystroke_inject:  "INJECT KEYSTROKES",
+    ble_spoof:         "SPOOF BLE DEVICE",
+  };
+
+  const DESTRUCTIVE_CONSEQUENCES = {
+    wifi_deauth:       "This transmits forged management frames. In most jurisdictions this is illegal outside your authorized scope.",
+    wifi_deauth_all:   "This transmits forged management frames at every client on the target BSSID. In most jurisdictions this is illegal outside your authorized scope.",
+    wifi_evil_portal:  "This stands up a rogue access point impersonating a nearby network. In most jurisdictions this is illegal outside your authorized scope.",
+    subghz_replay:     "This retransmits a captured RF signal. Use only against hardware you own or are explicitly authorized to test.",
+    subghz_transmit:   "This emits RF energy on the selected frequency. Regulated band use without a license may violate local law.",
+    subghz_jam:        "This emits continuous noise on the selected band. Jamming is illegal in most jurisdictions.",
+    nfc_write:         "This overwrites the tag's data. The original content is lost unless backed up.",
+    nfc_emulate:       "This impersonates a tag toward a reader. Only use against systems you own or are authorized to test.",
+    rfid_clone:        "This duplicates a credential. Only use against cards you own or are explicitly authorized to clone.",
+    rfid_write:        "This overwrites the card's data. Previous content is destroyed.",
+    ir_transmit:       "This transmits an IR command. The target device will respond as if the original remote were used.",
+    ibutton_write:     "This overwrites the iButton. The original identity is lost.",
+    keystroke_inject:  "This sends keystrokes to the connected host. The target receives them as if typed by the operator.",
+    ble_spoof:         "This broadcasts a forged BLE advertisement. Only use against devices you own or are authorized to test.",
+    default:           "This action may modify the environment. Confirm only if you are authorized.",
+  };
+
+  function titleForDestructive(toolName) {
+    return DESTRUCTIVE_TITLES[toolName]
+      || `CONFIRM: ${String(toolName || "").toUpperCase().replace(/_/g, " ")}`;
+  }
+
+  function consequenceForDestructive(toolName) {
+    return DESTRUCTIVE_CONSEQUENCES[toolName] || DESTRUCTIVE_CONSEQUENCES.default;
+  }
+
+  function formatToolCall(name, args) {
+    if (!args || Object.keys(args).length === 0) return `${name}()`;
+    const parts = Object.entries(args).map(([k, v]) => {
+      let vs;
+      if (typeof v === "string") vs = JSON.stringify(v);
+      else if (v == null) vs = "null";
+      else vs = JSON.stringify(v);
+      return `${k}=${vs}`;
+    });
+    return `${name}(${parts.join(", ")})`;
+  }
+
+  function formatScopeLine(scope) {
+    if (!scope || scope.template == null) {
+      return { name: "NO SCOPE", extra: "" };
+    }
+    const t = String(scope.template).toUpperCase();
+    if (scope.template === "pentesting" && scope.description) {
+      const d = scope.description;
+      const trimmed = d.length > 40 ? d.slice(0, 37) + "…" : d;
+      return { name: "PENTESTING", extra: ` · ${trimmed}` };
+    }
+    return { name: t, extra: "" };
+  }
+
+  function openDestructiveModal(msg) {
+    activeCallId = msg.call_id;
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    // Don't dismiss on backdrop click (touchscreen safety — spec §10.8).
+    backdrop.addEventListener("click", (e) => {
+      if (e.target === backdrop) e.stopPropagation();
+    });
+
+    const header = document.createElement("div");
+    header.className = "modal__header modal__header--destructive";
+    header.textContent = titleForDestructive(msg.tool_name);
+    modal.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "modal__body";
+
+    const call = document.createElement("div");
+    call.className = "mono-block mono-block--destructive";
+    call.textContent = formatToolCall(msg.tool_name, msg.arguments || {});
+    body.appendChild(call);
+
+    const consequence = document.createElement("p");
+    consequence.className = "modal__consequence";
+    consequence.textContent = consequenceForDestructive(msg.tool_name);
+    body.appendChild(consequence);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-hair";
+    body.appendChild(rule);
+
+    const scopeLine = document.createElement("div");
+    scopeLine.className = "modal__scope-line";
+    const sc = formatScopeLine(state.scope);
+    const scopeLabel = document.createTextNode("Scope · ");
+    const scopeName = document.createElement("strong");
+    scopeName.textContent = sc.name;
+    scopeLine.appendChild(scopeLabel);
+    scopeLine.appendChild(scopeName);
+    if (sc.extra) scopeLine.appendChild(document.createTextNode(sc.extra));
+    body.appendChild(scopeLine);
+
+    const trust = document.createElement("div");
+    trust.className = "modal__trust-line";
+    trust.textContent = "Trust remembered within this scope for 10 minutes.";
+    body.appendChild(trust);
+
+    modal.appendChild(body);
+
+    const buttons = document.createElement("div");
+    buttons.className = "modal__buttons";
+    const abort = document.createElement("button");
+    abort.type = "button";
+    abort.textContent = "ABORT";
+    abort.addEventListener("click", () => {
+      send({ type: "confirmation", call_id: msg.call_id, approved: false });
+      closeModal();
+    });
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "modal__btn-confirm";
+    confirm.textContent = "CONFIRM";
+    confirm.addEventListener("click", () => {
+      send({ type: "confirmation", call_id: msg.call_id, approved: true });
+      closeModal();
+    });
+    buttons.appendChild(abort);
+    buttons.appendChild(confirm);
+    modal.appendChild(buttons);
+
+    backdrop.appendChild(modal);
+    openModal(backdrop, "confirmation");
+  }
+
+  // ── Plan-approval modal (spec §10.9) ─────────────────────────
+
+  function openPlanApprovalModal(msg) {
+    activePlanId = msg.plan_id;
+
+    const isReplan = typeof msg.plan_id === "string" && msg.plan_id.includes("-replan");
+
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+
+    const header = document.createElement("div");
+    header.className = "modal__header " + (isReplan ? "modal__header--replan" : "modal__header--plan");
+    header.textContent = isReplan
+      ? "MEPHISTO PROPOSES A REVISED PLAN"
+      : "MEPHISTO PROPOSES A PLAN";
+    modal.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "modal__body";
+
+    const reasoningTitle = document.createElement("h3");
+    reasoningTitle.className = "type-h3 modal__section-title";
+    reasoningTitle.textContent = "Reasoning";
+    body.appendChild(reasoningTitle);
+
+    const reasoning = document.createElement("p");
+    reasoning.className = "type-body";
+    reasoning.style.color = "var(--ink-primary)";
+    reasoning.textContent = msg.reasoning || "";
+    body.appendChild(reasoning);
+
+    const stepsTitle = document.createElement("h3");
+    stepsTitle.className = "type-h3 modal__section-title";
+    stepsTitle.textContent = "Steps";
+    body.appendChild(stepsTitle);
+
+    const steps = document.createElement("ol");
+    steps.className = "plan-steps";
+    (msg.steps || []).forEach((step, idx) => {
+      const row = document.createElement("li");
+      row.className = "plan-steps__row";
+
+      const n = document.createElement("span");
+      n.className = "plan-steps__n";
+      n.textContent = `${idx + 1}.`;
+      row.appendChild(n);
+
+      const skillCell = document.createElement("span");
+      if (step.critical) {
+        const tag = document.createElement("span");
+        tag.className = "plan-steps__critical";
+        tag.textContent = "[DESTRUCT] ";
+        skillCell.appendChild(tag);
+      }
+      const skill = document.createElement("span");
+      skill.className = "plan-steps__skill";
+      skill.textContent = step.skill || "";
+      skillCell.appendChild(skill);
+      row.appendChild(skillCell);
+
+      const intent = document.createElement("span");
+      intent.className = "plan-steps__intent";
+      intent.textContent = step.intent || "";
+      row.appendChild(intent);
+
+      steps.appendChild(row);
+    });
+    body.appendChild(steps);
+
+    if (Array.isArray(msg.safety_notes) && msg.safety_notes.length > 0) {
+      const safetyTitle = document.createElement("h3");
+      safetyTitle.className = "type-h3 modal__section-title";
+      safetyTitle.textContent = "Safety notes";
+      body.appendChild(safetyTitle);
+
+      const notes = document.createElement("div");
+      notes.className = "plan-safety-notes";
+      for (const note of msg.safety_notes) {
+        const row = document.createElement("div");
+        row.className = "plan-safety-notes__row";
+        const icon = document.createElement("span");
+        icon.className = "plan-safety-notes__icon";
+        icon.textContent = "⚠";
+        const text = document.createElement("span");
+        text.textContent = note;
+        row.appendChild(icon);
+        row.appendChild(text);
+        notes.appendChild(row);
+      }
+      body.appendChild(notes);
+    }
+
+    modal.appendChild(body);
+
+    const buttons = document.createElement("div");
+    buttons.className = "modal__buttons";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.textContent = "REJECT";
+    reject.addEventListener("click", () => {
+      send({ type: "plan_approval", plan_id: msg.plan_id, approved: false });
+      closeModal();
+    });
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = isReplan ? "modal__btn-confirm--replan" : "modal__btn-confirm--plan";
+    approve.textContent = "APPROVE PLAN";
+    approve.addEventListener("click", () => {
+      send({ type: "plan_approval", plan_id: msg.plan_id, approved: true });
+      closeModal();
+    });
+    buttons.appendChild(reject);
+    buttons.appendChild(approve);
+    modal.appendChild(buttons);
+
+    backdrop.appendChild(modal);
+    openModal(backdrop, "plan");
+  }
+
+  // ── Scope-change modal (spec §10.10) ─────────────────────────
+
+  const SCOPE_TEMPLATES = [
+    { id: "recon",      title: "Strictly Recon",         desc: "Passive observation only. No transmission." },
+    { id: "self-test",  title: "Testing My Own Devices", desc: "Unlimited actions on hardware you own." },
+    { id: "pentesting", title: "Pentesting",             desc: "Requires description of engagement." },
+  ];
+
+  function openScopeModal() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+
+    const header = document.createElement("div");
+    header.className = "modal__header modal__header--scope";
+    header.textContent = "SET SCOPE";
+    modal.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "modal__body";
+
+    const options = document.createElement("div");
+    options.className = "scope-options";
+
+    let selectedTemplate = state.scope && state.scope.template || null;
+
+    const descField = document.createElement("textarea");
+    descField.className = "scope-description-input";
+    descField.placeholder = "Describe the engagement (target, authorization, timeframe)…";
+    descField.value = (state.scope && state.scope.description) || "";
+    descField.style.display = selectedTemplate === "pentesting" ? "" : "none";
+
+    const boxes = {};
+
+    const confirmBtn = document.createElement("button");
+    confirmBtn.type = "button";
+    confirmBtn.className = "modal__btn-confirm";
+    confirmBtn.textContent = "SET SCOPE";
+
+    function updateConfirmEnabled() {
+      const needDesc = selectedTemplate === "pentesting";
+      const hasDesc = descField.value.trim().length > 0;
+      const valid = !!selectedTemplate && (!needDesc || hasDesc);
+      confirmBtn.disabled = !valid;
+    }
+
+    for (const s of SCOPE_TEMPLATES) {
+      const radio = document.createElement("div");
+      radio.className = "scope-radio";
+
+      const box = document.createElement("div");
+      box.className = "scope-radio__box";
+      if (s.id === selectedTemplate) box.classList.add("scope-radio__box--selected");
+      boxes[s.id] = box;
+      radio.appendChild(box);
+
+      const info = document.createElement("div");
+      info.className = "scope-radio__info";
+      const title = document.createElement("div");
+      title.className = "scope-radio__title";
+      title.textContent = s.title;
+      const desc = document.createElement("div");
+      desc.className = "scope-radio__desc";
+      desc.textContent = s.desc;
+      info.appendChild(title);
+      info.appendChild(desc);
+      radio.appendChild(info);
+
+      radio.addEventListener("click", () => {
+        selectedTemplate = s.id;
+        for (const b of Object.values(boxes)) b.classList.remove("scope-radio__box--selected");
+        box.classList.add("scope-radio__box--selected");
+        descField.style.display = s.id === "pentesting" ? "" : "none";
+        updateConfirmEnabled();
+      });
+
+      options.appendChild(radio);
+    }
+    body.appendChild(options);
+    body.appendChild(descField);
+    descField.addEventListener("input", updateConfirmEnabled);
+    modal.appendChild(body);
+
+    const buttons = document.createElement("div");
+    buttons.className = "modal__buttons";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "CANCEL";
+    cancel.addEventListener("click", () => closeModal());
+
+    confirmBtn.addEventListener("click", () => {
+      if (!selectedTemplate) return;
+      const desc = descField.value.trim();
+      send({
+        type: "scope_change",
+        template: selectedTemplate,
+        description: selectedTemplate === "pentesting" ? desc : null,
+      });
+      closeModal();
+    });
+
+    buttons.appendChild(cancel);
+    buttons.appendChild(confirmBtn);
+    modal.appendChild(buttons);
+
+    updateConfirmEnabled();
+
+    backdrop.appendChild(modal);
+    openModal(backdrop, "scope");
+  }
+
   // ── body.active hook (spec §17.6) ────────────────────────────
   // Hoisted above the navigation-surface export so setActive is defined
   // when window.__faust is assigned below.
@@ -1138,8 +1603,7 @@
     }
 
     if (target.closest("#scope-label")) {
-      // Stage 9 opens the scope modal here. Logged for now.
-      console.log("[scope] Stage 9 modal not yet wired");
+      openScopeModal();
       return;
     }
   });
