@@ -24,7 +24,7 @@ from typing import Any
 from ..agent.backends import make_backend, make_deep_backend
 from ..agent.catalog import _categorize
 from ..agent.config import AgentConfig
-from ..agent.disclosure import DisclosureApprover
+from ..agent.disclosure import DisclosureApprover, TrustCache, scope_key_from_state
 from ..agent.dispatch import Dispatcher
 from ..agent.events import Final, PlanProposed, Thinking, ToolCallExecuted, ToolCallProposed
 from ..agent.journal import Journal
@@ -150,7 +150,15 @@ async def wire_live_agent(bridge: EventBridge, server: UIServer) -> dict[str, An
     journal = Journal(str(journal_path))
     confirm = UIConfirmation(bridge, server)
     approver = DisclosureApprover(journal, confirm=confirm)
-    dispatcher = Dispatcher(registry, approver=approver)
+    # TrustCache wraps DisclosureApprover: a successful approval silences the
+    # confirmation modal for later calls in the same scope / window. Scope
+    # changes invalidate the cache via server._handle_scope_change.
+    trust_cache = TrustCache(
+        inner=approver,
+        scope_key_source=lambda: scope_key_from_state(server.state.scope),
+    )
+    dispatcher = Dispatcher(registry, approver=trust_cache)
+    server.set_disclosure(trust_cache=trust_cache, journal=journal)
 
     # Scoper.
     scoper = None

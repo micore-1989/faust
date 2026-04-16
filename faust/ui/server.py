@@ -71,6 +71,10 @@ class UIServer:
         self._prompt_handler: PromptHandler | None = None
         self._dispatch_handler: DispatchHandler | None = None
         self._state_handler: StateHandler | None = None
+        # Wired by run.py so the scope_change handler can invalidate trust
+        # and journal the transition. Both optional for dev/test setups.
+        self._trust_cache: Any = None
+        self._journal: Any = None
         self._boot_task: asyncio.Task | None = None
         # Long-running handlers (prompt, dispatch) must not block the WS
         # receive loop — otherwise plan_approval / confirmation messages
@@ -117,6 +121,17 @@ class UIServer:
             self._dispatch_handler = dispatch_handler
         if state_handler is not None:
             self._state_handler = state_handler
+
+    def set_disclosure(
+        self,
+        trust_cache: Any = None,
+        journal: Any = None,
+    ) -> None:
+        """Install the server-side disclosure dependencies needed by the
+        scope_change handler. Safe to call with either / both as None in
+        dev/test environments."""
+        self._trust_cache = trust_cache
+        self._journal = journal
 
     def set_skills_catalog(self, skills: list[dict[str, Any]]) -> None:
         """Installed by the runner after loading skills. Sent to clients
@@ -180,16 +195,66 @@ class UIServer:
         self.state.power = Power.OFF
         self.state.mephisto = Mephisto.DISCONNECTED
         self.state.boot_progress = 0
+        # Re-arm the first-dock ceremony for the next boot.
+        self.state.first_dock_this_boot = True
         await self._broadcast_state()
 
     async def _mephisto_connect(self) -> None:
         if self.state.power != Power.ON:
             return
         self.state.mephisto = Mephisto.CONNECTED
+        # The ceremony must fire exactly once per boot (§10.13): broadcast
+        # the state with first_dock_this_boot=True, then immediately clear
+        # the flag so subsequent reconnects in the same boot are silent.
+        was_first = self.state.first_dock_this_boot
         await self._broadcast_state()
+        if was_first:
+            self.state.first_dock_this_boot = False
 
     async def _mephisto_disconnect(self) -> None:
         self.state.mephisto = Mephisto.DISCONNECTED
+        await self._broadcast_state()
+
+    # ── Scope management ──────────────────────────────────────────
+
+    _VALID_SCOPE_TEMPLATES = {None, "recon", "self-test", "pentesting"}
+
+    async def _handle_scope_change(self, payload: dict[str, Any]) -> None:
+        """Validate + apply a scope change. Invalidates TrustCache and
+        journals the transition so auditors see when scope flipped (spec
+        §10.10)."""
+        template = payload.get("template")
+        description = payload.get("description")
+
+        if template not in self._VALID_SCOPE_TEMPLATES:
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": f"invalid scope template: {template!r}",
+            })
+            return
+        if template == "pentesting" and not (description or "").strip():
+            await self.bridge.push_raw({
+                "type": "error",
+                "message": "pentesting scope requires a non-empty description",
+            })
+            return
+
+        previous = self.state.set_scope(template, description)
+
+        if self._trust_cache is not None:
+            self._trust_cache.invalidate()
+
+        if self._journal is not None:
+            self._journal.record(
+                tool_name="scope.set",
+                arguments={
+                    "previous": previous,
+                    "new": {"template": template, "description": description},
+                },
+                sensitivity="passive",
+                decision="auto",
+            )
+
         await self._broadcast_state()
 
     # ── WebSocket handler ──────────────────────────────────────────
@@ -279,6 +344,9 @@ class UIServer:
                 await self._mephisto_connect()
             elif action == "disconnect":
                 await self._mephisto_disconnect()
+
+        elif mtype == "scope_change":
+            await self._handle_scope_change(payload)
 
         elif mtype == "confirmation":
             await self._confirmation_queue.put(payload)

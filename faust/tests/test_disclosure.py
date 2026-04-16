@@ -20,10 +20,15 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from faust.agent.disclosure import DisclosureApprover
+from faust.agent.disclosure import (
+    DisclosureApprover,
+    TrustCache,
+    scope_key_from_state,
+)
 from faust.agent.dispatch import Dispatcher
 from faust.agent.journal import GENESIS_HASH, Journal
 from faust.tools.registry import Sensitivity, Tool, ToolRegistry
+from faust.ui.state import ScopeState
 
 
 # ------------- Helpers -------------
@@ -305,6 +310,198 @@ async def test_disclosure_dispatcher_rejection():
     print("✓ disclosure + dispatcher rejection")
 
 
+# ------------- TrustCache tests -------------
+
+class CountingApprover:
+    """Inner approver that counts invocations and can be scripted to
+    return varying results per call."""
+
+    def __init__(self, results: list[bool] | None = None, default: bool = True) -> None:
+        self._results = list(results) if results else []
+        self._default = default
+        self.calls: list[tuple[str, dict[str, Any], Sensitivity]] = []
+
+    async def __call__(
+        self, tool_name: str, arguments: dict[str, Any], sens: Sensitivity,
+    ) -> bool:
+        self.calls.append((tool_name, arguments, sens))
+        if self._results:
+            return self._results.pop(0)
+        return self._default
+
+
+class FakeClock:
+    """Deterministic monotonic-like clock for TrustCache tests."""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class TestTrustCache:
+    """Groups all TrustCache behavior tests per task spec. Methods use
+    `self` so pytest resolves them under the class path
+    `test_disclosure.py::TestTrustCache`."""
+
+    async def test_first_call_runs_inner(self):
+        """Empty cache — first call must delegate to inner approver."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, scope_key_source=lambda: "recon", time_source=clock)
+
+        ok = await tc("wifi_deauth", {"bssid": "aa"}, "disruptive")
+        assert ok is True
+        assert len(inner.calls) == 1
+        assert tc.last_decision_was_cached is False
+        print("✓ TrustCache first call runs inner approver")
+
+    async def test_cached_within_window_skips_inner(self):
+        """Second call within window with same scope — inner NOT invoked."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, window_s=600,
+                        scope_key_source=lambda: "recon", time_source=clock)
+
+        await tc("wifi_deauth", {"bssid": "aa"}, "disruptive")
+        clock.advance(30)  # 30s later, still in window
+        ok = await tc("wifi_deauth", {"bssid": "bb"}, "disruptive")
+
+        assert ok is True
+        assert len(inner.calls) == 1, "inner should have been called exactly once"
+        assert tc.last_decision_was_cached is True
+        print("✓ TrustCache within window skips inner approver")
+
+    async def test_cached_across_scope_boundary_runs_inner(self):
+        """Scope key changes between calls — cache must miss."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        scope: dict[str, str] = {"key": "recon"}
+        tc = TrustCache(
+            inner=inner, window_s=600,
+            scope_key_source=lambda: scope["key"],
+            time_source=clock,
+        )
+
+        await tc("wifi_deauth", {}, "disruptive")
+        scope["key"] = "pentesting:corp-engagement-042"  # scope changes
+        clock.advance(10)
+        await tc("wifi_deauth", {}, "disruptive")
+
+        assert len(inner.calls) == 2
+        assert tc.last_decision_was_cached is False
+        print("✓ TrustCache across scope boundary invokes inner")
+
+    async def test_cached_after_window_expiry_runs_inner(self):
+        """Advancing the injected clock past the window forces a re-check."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, window_s=600,
+                        scope_key_source=lambda: "recon", time_source=clock)
+
+        await tc("wifi_deauth", {}, "disruptive")
+        clock.advance(601)  # just past window
+        await tc("wifi_deauth", {}, "disruptive")
+
+        assert len(inner.calls) == 2
+        assert tc.last_decision_was_cached is False
+        print("✓ TrustCache after window expiry re-runs inner")
+
+    async def test_invalidate_clears_cache(self):
+        """invalidate() drops the cache — next call goes through inner."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, scope_key_source=lambda: "recon",
+                        time_source=clock)
+
+        await tc("wifi_deauth", {}, "disruptive")
+        tc.invalidate()
+        await tc("wifi_deauth", {}, "disruptive")
+
+        assert len(inner.calls) == 2
+        print("✓ TrustCache invalidate() drops the cache")
+
+    async def test_rejection_not_cached(self):
+        """Inner rejected → cache untouched. Second call must hit inner again."""
+        inner = CountingApprover(results=[False, True])
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, scope_key_source=lambda: "recon",
+                        time_source=clock)
+
+        ok1 = await tc("wifi_deauth", {}, "disruptive")
+        ok2 = await tc("wifi_deauth", {}, "disruptive")
+
+        assert ok1 is False and ok2 is True
+        assert len(inner.calls) == 2, "rejection must not populate the cache"
+        print("✓ TrustCache rejection does not populate cache")
+
+    async def test_scope_key_derivation(self):
+        """scope_key_from_state: None → 'none', recon → 'recon', pentesting
+        gets description tacked on so engagements don't share trust."""
+        assert scope_key_from_state(ScopeState()) == "none"
+        assert scope_key_from_state(ScopeState(template="recon")) == "recon"
+        assert scope_key_from_state(ScopeState(template="self-test")) == "self-test"
+        k1 = scope_key_from_state(
+            ScopeState(template="pentesting", description="engagement A")
+        )
+        k2 = scope_key_from_state(
+            ScopeState(template="pentesting", description="engagement B")
+        )
+        assert k1 == "pentesting:engagement A"
+        assert k2 == "pentesting:engagement B"
+        assert k1 != k2, "different pentesting descriptions must get different keys"
+        print("✓ scope_key_from_state derives 4 key shapes correctly")
+
+    async def test_last_decision_was_cached_flag(self):
+        """Flag is False after a fresh call, True after a cache hit, and
+        flips back to False when the cache misses again."""
+        inner = CountingApprover()
+        clock = FakeClock()
+        tc = TrustCache(inner=inner, scope_key_source=lambda: "recon",
+                        time_source=clock)
+
+        await tc("wifi_deauth", {}, "disruptive")
+        assert tc.last_decision_was_cached is False
+
+        clock.advance(1)
+        await tc("wifi_deauth", {}, "disruptive")
+        assert tc.last_decision_was_cached is True
+
+        tc.invalidate()
+        await tc("wifi_deauth", {}, "disruptive")
+        assert tc.last_decision_was_cached is False
+        print("✓ last_decision_was_cached tracks fresh vs remembered")
+
+
+async def test_trust_cache_preserves_disclosure_seam():
+    """Spec §16.4 + CLAUDE.md rule 3: TrustCache must not bypass
+    DisclosureApprover on a cache miss — it delegates, so the journal sees
+    the call as usual."""
+    j, path = _tmp_journal()
+    try:
+        async def always_approve(name, args, sens):
+            return True
+
+        inner = DisclosureApprover(j, confirm=always_approve)
+        tc = TrustCache(inner=inner, scope_key_source=lambda: "recon")
+
+        await tc("wifi_deauth", {"bssid": "aa"}, "disruptive")
+        # Cache hit — journal should NOT get a second entry, because the
+        # caller is responsible for journaling the "remembered" decision.
+        await tc("wifi_deauth", {"bssid": "bb"}, "disruptive")
+
+        entries = j.entries()
+        assert len(entries) == 1
+        assert entries[0].decision == "approved"
+    finally:
+        _cleanup(j, path)
+    print("✓ TrustCache wraps DisclosureApprover (does not bypass it)")
+
+
 async def main():
     # Journal tests
     await test_journal_append_and_read()
@@ -324,6 +521,18 @@ async def main():
     # Integration tests
     await test_disclosure_dispatcher_integration()
     await test_disclosure_dispatcher_rejection()
+
+    # TrustCache tests
+    tc_tests = TestTrustCache()
+    await tc_tests.test_first_call_runs_inner()
+    await tc_tests.test_cached_within_window_skips_inner()
+    await tc_tests.test_cached_across_scope_boundary_runs_inner()
+    await tc_tests.test_cached_after_window_expiry_runs_inner()
+    await tc_tests.test_invalidate_clears_cache()
+    await tc_tests.test_rejection_not_cached()
+    await tc_tests.test_scope_key_derivation()
+    await tc_tests.test_last_decision_was_cached_flag()
+    await test_trust_cache_preserves_disclosure_seam()
 
     print("\nall disclosure tests passed")
 

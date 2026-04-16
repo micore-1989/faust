@@ -191,6 +191,158 @@ async def test_bridge_push_raw():
     print("✓ bridge push_raw works")
 
 
+class _StubTrustCache:
+    def __init__(self) -> None:
+        self.invalidations = 0
+
+    def invalidate(self) -> None:
+        self.invalidations += 1
+
+
+class _StubJournal:
+    def __init__(self) -> None:
+        self.records: list[dict[str, Any]] = []
+
+    def record(self, **kwargs) -> None:
+        self.records.append(kwargs)
+
+
+async def test_scope_change_updates_state():
+    """scope_change with valid payload flips SimulatorState.scope."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "recon",
+        "description": None,
+    })
+    assert server.state.scope.template == "recon"
+    assert server.state.scope.description is None
+    print("✓ scope_change updates SimulatorState.scope")
+
+
+async def test_scope_change_emits_state_message():
+    """Clients see an updated `state` message carrying the new scope."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    q = bridge.subscribe()
+
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "pentesting",
+        "description": "corp red-team 2026",
+    })
+
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "state"
+    assert msg["scope"] == {
+        "template": "pentesting",
+        "description": "corp red-team 2026",
+    }
+    bridge.unsubscribe(q)
+    print("✓ scope_change broadcasts updated state")
+
+
+async def test_scope_change_creates_journal_entry():
+    """Journal sees a `scope.set` entry with previous + new scope."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    journal = _StubJournal()
+    trust = _StubTrustCache()
+    server.set_disclosure(trust_cache=trust, journal=journal)
+
+    # Seed with an initial scope so the journal sees a non-null previous.
+    server.state.set_scope("recon", None)
+
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "self-test",
+        "description": None,
+    })
+
+    assert len(journal.records) == 1
+    entry = journal.records[0]
+    assert entry["tool_name"] == "scope.set"
+    assert entry["decision"] == "auto"
+    assert entry["arguments"]["previous"] == {
+        "template": "recon", "description": None,
+    }
+    assert entry["arguments"]["new"] == {
+        "template": "self-test", "description": None,
+    }
+    print("✓ scope_change journals prev+new as scope.set entry")
+
+
+async def test_scope_change_invalidates_trust():
+    """TrustCache.invalidate() fires on every scope_change."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    trust = _StubTrustCache()
+    server.set_disclosure(trust_cache=trust)
+
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "recon",
+        "description": None,
+    })
+    assert trust.invalidations == 1
+
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "pentesting",
+        "description": "next engagement",
+    })
+    assert trust.invalidations == 2
+    print("✓ scope_change invalidates TrustCache")
+
+
+async def test_scope_change_rejects_pentesting_without_description():
+    """Pentesting requires a non-empty description; server replies with
+    error and leaves state/scope untouched."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    q = bridge.subscribe()
+    trust = _StubTrustCache()
+    journal = _StubJournal()
+    server.set_disclosure(trust_cache=trust, journal=journal)
+
+    # Missing description.
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "pentesting",
+        "description": "",
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+    assert "pentesting" in msg["message"].lower()
+    # Scope unchanged, cache not invalidated, no journal entry.
+    assert server.state.scope.template is None
+    assert trust.invalidations == 0
+    assert journal.records == []
+
+    # Whitespace-only description also rejected.
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "pentesting",
+        "description": "   ",
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+
+    # Invalid template also rejected.
+    await server._handle_incoming({
+        "type": "scope_change",
+        "template": "bogus",
+        "description": None,
+    })
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["type"] == "error"
+    assert "invalid scope" in msg["message"].lower()
+
+    bridge.unsubscribe(q)
+    print("✓ scope_change validates template + required description")
+
+
 async def test_prompt_handler_does_not_deadlock_on_approval():
     """Regression: the WS receive loop must stay free while a prompt
     handler is awaiting plan_approval. Otherwise the approval message
@@ -259,6 +411,11 @@ async def main():
     await test_bridge_unsubscribe()
     await test_bridge_maps_phase_marker_events()
     await test_bridge_push_raw()
+    await test_scope_change_updates_state()
+    await test_scope_change_emits_state_message()
+    await test_scope_change_creates_journal_entry()
+    await test_scope_change_invalidates_trust()
+    await test_scope_change_rejects_pentesting_without_description()
     await test_prompt_handler_does_not_deadlock_on_approval()
     print("\nall UI tests passed")
 

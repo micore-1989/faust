@@ -91,6 +91,17 @@ class SimulatorState:
         """True when booted (Mephisto irrelevant for direct skill dispatch)."""
         return self.power == Power.ON
 
+    def set_scope(
+        self,
+        template: Optional[str],
+        description: Optional[str],
+    ) -> dict[str, Any]:
+        """Replace the session scope. Returns the previous scope as a dict
+        so the server can journal the transition."""
+        previous = self.scope.to_dict()
+        self.scope = ScopeState(template=template, description=description)
+        return previous
+
 
 # Realistic-looking boot log, pacing matches a real Pi 5 + faust.service boot:
 #   - kernel stage streams in a fast burst (first ~1s)
