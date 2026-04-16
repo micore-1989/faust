@@ -137,7 +137,108 @@
     currentToolCall: null,           // Stage 8 dashboard radio-tile marker
     toolPane: null,                  // Stage 10 Mephisto tool-output pane {name, args, output}
     active: false,                   // body.active hook
+    // Stage 11 — Pursuits runtime state (null when no Pursuit is in flight)
+    activePursuit: null,             // {pursuit_id, progress, elapsed_s, eta_s, activity: []}
+    settings: {},                    // Stage 11 — localStorage-backed UI-only prefs
   };
+
+  // ── Stage 11 — Pursuit catalog (mirrors faust/pursuits/registry.py) ─
+  // The server doesn't expose a pursuits_list endpoint yet; we ship the
+  // catalog client-side, keeping the ids/param shapes aligned with the
+  // runner so {type:"pursuit_start"} lands on a valid implementation.
+  const PURSUIT_CATALOG = [
+    {
+      id: "wardrive", title: "Wardrive",
+      description: "Drive or walk while capturing WiFi and GPS simultaneously. Exports a geo-tagged network map.",
+      duration: "~30 min", tools: ["WIFI", "GPS"],
+      parameters: {
+        properties: {
+          duration_minutes: { type: "integer", default: 30 },
+          frequency_band: { type: "string", enum: ["2.4 GHz only", "5 GHz only", "dual band"], default: "2.4 GHz only" },
+          gps_required: { type: "boolean", default: true },
+        },
+      },
+    },
+    {
+      id: "clone-credential", title: "Clone Access Credential",
+      description: "Read an LF RFID card (T5577/EM4100/HID Prox) and write its data to a blank card.",
+      duration: "~2 min", tools: ["LF RFID"],
+      parameters: { properties: {} },
+    },
+    {
+      id: "replay-subghz", title: "Replay Sub-GHz Remote",
+      description: "Capture a garage door or keyfob transmission, analyze, and replay.",
+      duration: "~5 min", tools: ["SUB-GHZ"],
+      parameters: {
+        properties: {
+          frequency_mhz: { type: "string", enum: ["315", "433.92", "868", "915"], default: "433.92" },
+        },
+      },
+    },
+    {
+      id: "evil-portal", title: "Evil Portal",
+      description: "Stand up a captive portal on a rogue AP to observe credential-submission behavior in a controlled environment.",
+      duration: "open-ended", tools: ["WIFI"],
+      parameters: {
+        properties: {
+          ssid: { type: "string", default: "free-wifi" },
+        },
+      },
+    },
+    {
+      id: "bluetooth-recon", title: "Bluetooth Recon",
+      description: "Passively survey nearby BLE devices, log advertisements, classify vendor and role.",
+      duration: "~10 min", tools: ["WIFI", "BLE"],
+      parameters: {
+        properties: {
+          duration_minutes: { type: "integer", default: 10 },
+        },
+      },
+    },
+    {
+      id: "subghz-capture-analyze", title: "Sub-GHz Capture + Analyze",
+      description: "Capture IQ data on a chosen frequency, demodulate, and extract recognizable signal patterns.",
+      duration: "~15 min", tools: ["SUB-GHZ"],
+      parameters: {
+        properties: {
+          frequency_mhz: { type: "string", default: "433.92" },
+          capture_seconds: { type: "integer", default: 120 },
+        },
+      },
+    },
+    {
+      id: "hmc-demo", title: "Harvey Mudd Demo",
+      description: "Scripted demonstration sequence for the student showcase: scan, capture, Pursuit-complete. Uses a dedicated demo SSID.",
+      duration: "~3 min", tools: ["WIFI", "JOURNAL"],
+      parameters: { properties: {} },
+    },
+    {
+      id: "custom", title: "Custom Pursuit",
+      description: "Build your own Pursuit.",
+      duration: "—", tools: [],
+      parameters: { properties: {} },
+      isCustom: true,
+    },
+  ];
+
+  function pursuitById(id) {
+    return PURSUIT_CATALOG.find((p) => p.id === id) || null;
+  }
+
+  // ── Stage 11 — Settings persistence (localStorage) ───────────
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem("faust.settings");
+      state.settings = raw ? JSON.parse(raw) : {};
+    } catch {
+      state.settings = {};
+    }
+    // Apply reduced-motion immediately so the rest of boot respects it.
+    document.body.classList.toggle("reduced-motion", !!state.settings.reduced_motion);
+  }
+  function saveSettings() {
+    try { localStorage.setItem("faust.settings", JSON.stringify(state.settings)); } catch {}
+  }
 
   // ── DOM refs ─────────────────────────────────────────────────
   const $ = (id) => document.getElementById(id);
@@ -310,13 +411,43 @@
         enqueueOrOpenModal({ type: "plan", msg });
         break;
 
-      // ── Pursuit events (Stage 11 renders) ──
+      // ── Pursuit events (spec §10.4.1 / §10.4.2) ──
       case "pursuit_progress":
-      case "pursuit_activity":
+        if (!state.activePursuit) {
+          state.activePursuit = { pursuit_id: msg.pursuit_id, activity: [] };
+        }
+        state.activePursuit.progress = msg.progress;
+        state.activePursuit.elapsed_s = msg.elapsed_s;
+        state.activePursuit.eta_s = msg.eta_s;
+        markViewDirty();
         break;
+
+      case "pursuit_activity":
+        if (!state.activePursuit) {
+          state.activePursuit = { pursuit_id: msg.pursuit_id, activity: [] };
+        }
+        // Newest-first; cap at 20 so a long Pursuit doesn't grow the
+        // running pane's DOM unboundedly (spec §17.8 perf guidance).
+        state.activePursuit.activity = [msg.line, ...state.activePursuit.activity].slice(0, 20);
+        markViewDirty();
+        break;
+
       case "pursuit_stopped":
+        setActive(false);
+        state.activePursuit = null;
+        if (state.currentView === "pursuit-running") {
+          state.currentView = "pursuits";
+          state.currentTab = "pursuits";
+          state.viewStack = [];
+          markViewDirty();
+        }
+        showToast(msg.error ? `Pursuit stopped: ${msg.error}` : "Pursuit stopped");
+        break;
+
       case "pursuit_complete":
         setActive(false);
+        state.activePursuit = null;
+        showPursuitCompleteOverlay(msg);
         break;
 
       // ── Journal ──
@@ -326,9 +457,17 @@
         markViewDirty();
         break;
 
+      case "journal_entry_updated":
+        if (Array.isArray(state.journalEntries)) {
+          const idx = state.journalEntries.findIndex((e) => String(e.id) === String(msg.id));
+          if (idx >= 0) state.journalEntries[idx].notes = msg.notes || "";
+        }
+        break;
+
       case "error":
         console.error("[server error]", msg.message);
         setActive(false);
+        showToast(msg.message || "Server error");
         break;
 
       default:
@@ -996,6 +1135,18 @@
       renderParameterForm(screen);
     } else if (view === "mephisto") {
       renderMephisto(screen);
+    } else if (view === "pursuits") {
+      renderPursuits(screen);
+    } else if (view === "pursuit-detail") {
+      renderPursuitDetail(screen);
+    } else if (view === "pursuit-running") {
+      renderPursuitRunning(screen);
+    } else if (view === "journal") {
+      renderJournal(screen);
+    } else if (view === "journal-entry") {
+      renderJournalEntry(screen);
+    } else if (view === "settings") {
+      renderSettings(screen);
     }
     // If the next render lands on a different screen, we want to start
     // fresh. `builtFor` tracks the parameter-form case where we also
@@ -1458,13 +1609,13 @@
     }, 400 + 2000);
   }
 
-  // ── Dev shortcut (spec §13) ──────────────────────────────────
+  // ── Dock-toggle shortcut (spec §13) ──────────────────────────
   //
-  // DEV ONLY — Ctrl+D simulates a Mephisto dock/undock by sending the
-  // same mephisto WS message the future USB detector would issue. The
+  // Ctrl+D simulates a Mephisto dock/undock by sending the same
+  // mephisto WS message the future USB detector would issue. The
   // server owns the transition, so the ceremony, palette swap, mode
   // label, and auto-navigate-on-undock behaviors all fall out of the
-  // regular applyServerState path.
+  // regular applyServerState path. Useful during demos too.
   document.addEventListener("keydown", (e) => {
     if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
       e.preventDefault();
@@ -1472,6 +1623,849 @@
       send({ type: "mephisto", action });
     }
   });
+
+  // ── Stage 11 — Toast (error + status) ────────────────────────
+  let toastEl = null;
+  let toastTimer = null;
+  function showToast(text, ms = 3000) {
+    if (!toastEl) {
+      toastEl = document.createElement("div");
+      toastEl.className = "error-toast";
+      toastEl.setAttribute("role", "status");
+      document.body.appendChild(toastEl);
+    }
+    toastEl.textContent = text;
+    requestAnimationFrame(() => toastEl.classList.add("error-toast--visible"));
+    if (toastTimer) clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => {
+      toastEl.classList.remove("error-toast--visible");
+      toastTimer = null;
+    }, ms);
+  }
+
+  // ── Stage 11 — Pursuits (spec §10.4 / §10.4.1 / §10.4.2) ─────
+
+  function renderPursuits(screen) {
+    screen.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "pursuits-screen";
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = "PURSUITS";
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy--short";
+    wrap.appendChild(rule);
+
+    const grid = document.createElement("div");
+    grid.className = "pursuit-grid";
+    for (const p of PURSUIT_CATALOG) grid.appendChild(renderPursuitCard(p));
+    wrap.appendChild(grid);
+
+    screen.appendChild(wrap);
+  }
+
+  function renderPursuitCard(p) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "pursuit-card";
+    if (p.isCustom) card.classList.add("pursuit-card--custom");
+    card.dataset.pursuitId = p.id;
+
+    const title = document.createElement("div");
+    title.className = "pursuit-card__title";
+    title.textContent = p.title;
+    card.appendChild(title);
+
+    const desc = document.createElement("div");
+    desc.className = "pursuit-card__desc";
+    desc.textContent = p.description;
+    card.appendChild(desc);
+
+    const meta = document.createElement("div");
+    meta.className = "pursuit-card__meta";
+    if (p.duration) {
+      const d = document.createElement("span");
+      d.textContent = p.duration;
+      meta.appendChild(d);
+    }
+    if (p.tools && p.tools.length) {
+      const t = document.createElement("span");
+      t.textContent = p.tools.join(" · ");
+      meta.appendChild(t);
+    }
+    card.appendChild(meta);
+
+    card.addEventListener("click", () => {
+      if (p.isCustom) {
+        showToast("Custom Pursuits coming in v1.1");
+        return;
+      }
+      pushView("pursuit-detail", { pursuit_id: p.id });
+    });
+    return card;
+  }
+
+  function renderPursuitDetail(screen) {
+    const pid = state.currentViewParams.pursuit_id;
+    const pursuit = pursuitById(pid);
+    screen.innerHTML = "";
+
+    if (!pursuit) {
+      const err = document.createElement("div");
+      err.className = "pursuit-detail-screen";
+      err.textContent = "Unknown Pursuit.";
+      screen.appendChild(err);
+      return;
+    }
+
+    // Build once per visit so the params form doesn't reset on state updates.
+    if (screen.dataset.builtFor === "pursuit:" + pid) return;
+    screen.dataset.builtFor = "pursuit:" + pid;
+
+    const wrap = document.createElement("div");
+    wrap.className = "pursuit-detail-screen";
+
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "back-btn";
+    back.setAttribute("aria-label", "Back");
+    back.innerHTML = '<i class="ph ph-arrow-left"></i><span>BACK</span>';
+    back.addEventListener("click", () => goBack());
+    wrap.appendChild(back);
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = pursuit.title;
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy--short";
+    wrap.appendChild(rule);
+
+    const desc = document.createElement("p");
+    desc.className = "pursuit-detail__desc type-body";
+    desc.textContent = pursuit.description;
+    wrap.appendChild(desc);
+
+    const meta = document.createElement("div");
+    meta.className = "pursuit-detail__meta";
+    meta.textContent = `Duration ${pursuit.duration} · Tools ${pursuit.tools.join(" · ") || "—"}`;
+    wrap.appendChild(meta);
+
+    const paramsTitle = document.createElement("h3");
+    paramsTitle.className = "type-h3";
+    paramsTitle.textContent = "Parameters";
+    wrap.appendChild(paramsTitle);
+
+    const form = document.createElement("form");
+    form.className = "parameter-form__fields";
+    form.addEventListener("submit", (e) => e.preventDefault());
+    // Prefill from spec defaults.
+    const prefill = {};
+    for (const [k, spec] of Object.entries(pursuit.parameters.properties || {})) {
+      if ("default" in spec) prefill[k] = spec.default;
+    }
+    renderFormFields(pursuit.parameters || {}, prefill, form);
+    wrap.appendChild(form);
+
+    const actions = document.createElement("div");
+    actions.className = "pursuit-detail__actions";
+
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "btn-secondary";
+    cancel.textContent = "CANCEL";
+    cancel.addEventListener("click", () => goBack());
+
+    const start = document.createElement("button");
+    start.type = "button";
+    start.className = "btn-primary";
+    start.textContent = "START PURSUIT ▶";
+    start.addEventListener("click", () => {
+      const params = collectFormArgs(pursuit.parameters || {}, form);
+      state.activePursuit = {
+        pursuit_id: pid,
+        progress: 0,
+        elapsed_s: 0,
+        eta_s: null,
+        activity: [],
+      };
+      setActive(true);
+      send({ type: "pursuit_start", pursuit_id: pid, params });
+      pushView("pursuit-running", { pursuit_id: pid });
+    });
+
+    actions.appendChild(cancel);
+    actions.appendChild(start);
+    wrap.appendChild(actions);
+
+    screen.appendChild(wrap);
+  }
+
+  function renderPursuitRunning(screen) {
+    const pid = state.currentViewParams.pursuit_id;
+    const pursuit = pursuitById(pid);
+    screen.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "pursuit-running-screen";
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = pursuit ? pursuit.title : (pid || "Pursuit");
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy";
+    rule.style.height = "3px";
+    rule.style.margin = "8px 0 16px";
+    wrap.appendChild(rule);
+
+    const status = document.createElement("div");
+    status.className = "pursuit-running__status";
+    const p = state.activePursuit || {};
+    const progress = typeof p.progress === "number" ? p.progress : 0;
+    const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
+    const elapsedStr = formatDurationShort(p.elapsed_s || 0);
+    const etaStr = p.eta_s != null ? formatDurationShort(p.eta_s) : "—";
+    status.textContent = `RUNNING · ${pct}% · elapsed ${elapsedStr} · eta ${etaStr}`;
+    wrap.appendChild(status);
+
+    const bar = document.createElement("div");
+    bar.className = "pursuit-progress";
+    const fill = document.createElement("div");
+    fill.className = "pursuit-progress__fill";
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    wrap.appendChild(bar);
+
+    const activityLabel = document.createElement("h3");
+    activityLabel.className = "type-h3";
+    activityLabel.textContent = "Activity";
+    wrap.appendChild(activityLabel);
+
+    const activity = document.createElement("div");
+    activity.className = "pursuit-activity";
+    if (!p.activity || p.activity.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "pursuit-activity__line";
+      empty.style.color = "var(--ink-quiet)";
+      empty.textContent = "…";
+      activity.appendChild(empty);
+    } else {
+      for (const line of p.activity) {
+        const row = document.createElement("div");
+        row.className = "pursuit-activity__line";
+        row.textContent = line;
+        activity.appendChild(row);
+      }
+    }
+    wrap.appendChild(activity);
+
+    const actions = document.createElement("div");
+    actions.className = "pursuit-running__actions";
+    const stop = document.createElement("button");
+    stop.type = "button";
+    stop.className = "btn-secondary settings-poweroff";
+    stop.textContent = "STOP PURSUIT";
+    stop.addEventListener("click", () => {
+      send({ type: "pursuit_stop", pursuit_id: pid });
+    });
+    actions.appendChild(stop);
+    wrap.appendChild(actions);
+
+    screen.appendChild(wrap);
+  }
+
+  function showPursuitCompleteOverlay(msg) {
+    // Full-screen poster that covers the whole UI (spec §10.4.2). We
+    // don't route through render() because the overlay lives above the
+    // view machinery — removing it on its own timer.
+    const pursuit = pursuitById(msg.pursuit_id);
+    const overlay = document.createElement("div");
+    overlay.className = "pursuit-complete-overlay";
+
+    const title = document.createElement("div");
+    title.className = "pursuit-complete__title";
+    title.textContent = pursuit ? pursuit.title : (msg.pursuit_id || "Pursuit");
+    overlay.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "pursuit-complete__rule";
+    overlay.appendChild(rule);
+
+    const label = document.createElement("div");
+    label.className = "pursuit-complete__label";
+    label.textContent = "COMPLETE";
+    overlay.appendChild(label);
+
+    if (msg.summary) {
+      const summary = document.createElement("div");
+      summary.className = "pursuit-complete__summary";
+      summary.textContent = msg.summary;
+      overlay.appendChild(summary);
+    }
+
+    const circle = document.createElement("div");
+    circle.className = "pursuit-complete__circle";
+    overlay.appendChild(circle);
+
+    const diamond = document.createElement("div");
+    diamond.className = "pursuit-complete__diamond";
+    diamond.textContent = "◇";
+    overlay.appendChild(diamond);
+
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add("pursuit-complete-overlay--visible"));
+
+    // Hold 2000ms → 200ms fade → navigate to journal entry (if any).
+    setTimeout(() => {
+      overlay.classList.remove("pursuit-complete-overlay--visible");
+      setTimeout(() => {
+        overlay.remove();
+        if (msg.journal_entry_id) {
+          state.currentView = "journal-entry";
+          state.currentTab = "journal";
+          state.viewStack = [];
+          state.currentViewParams = { id: String(msg.journal_entry_id) };
+          markViewDirty();
+          render();
+          send({ type: "journal_query", filters: { id: String(msg.journal_entry_id) } });
+        } else {
+          state.currentView = "pursuits";
+          state.currentTab = "pursuits";
+          state.viewStack = [];
+          markViewDirty();
+          render();
+        }
+      }, 200);
+    }, 2000);
+  }
+
+  function formatDurationShort(seconds) {
+    const s = Math.max(0, Math.floor(seconds || 0));
+    if (s < 60) return s + "s";
+    const m = Math.floor(s / 60);
+    const rem = s % 60;
+    return `${m}m${rem > 0 ? " " + rem + "s" : ""}`;
+  }
+
+  // ── Stage 11 — Journal (spec §10.5 / §10.6) ──────────────────
+
+  let journalQueryInFlight = false;
+  function requestJournal(filters) {
+    journalQueryInFlight = true;
+    send({ type: "journal_query", filters: filters || {} });
+  }
+
+  function renderJournal(screen) {
+    // Refresh each time the tab is entered. The server's response
+    // (journal_entries) triggers another render via markViewDirty.
+    if (screen.dataset.builtFor !== "journal") {
+      screen.innerHTML = "";
+      screen.dataset.builtFor = "journal";
+      buildJournalShell(screen);
+      requestJournal(readJournalFilters());
+      return;
+    }
+    updateJournalRows(screen);
+  }
+
+  function buildJournalShell(screen) {
+    const wrap = document.createElement("div");
+    wrap.className = "journal-screen";
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = "JOURNAL";
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy--short";
+    wrap.appendChild(rule);
+
+    const filters = document.createElement("div");
+    filters.className = "journal-filters";
+
+    const toolOpts = Array.from(
+      new Set((state.skills || []).map((s) => s.name)),
+    ).sort();
+    const groupOpts = ["wifi_ble", "sub_ghz", "nfc", "lf_rfid", "ir", "vision", "meta"];
+
+    const mkSelect = (id, label, opts) => {
+      const sel = document.createElement("select");
+      sel.className = "journal-filter";
+      sel.id = id;
+      const first = document.createElement("option");
+      first.value = "";
+      first.textContent = label;
+      sel.appendChild(first);
+      for (const o of opts) {
+        const opt = document.createElement("option");
+        opt.value = typeof o === "string" ? o : o.value;
+        opt.textContent = typeof o === "string" ? o : o.label;
+        sel.appendChild(opt);
+      }
+      sel.addEventListener("change", () => requestJournal(readJournalFilters()));
+      return sel;
+    };
+
+    filters.appendChild(mkSelect("jf-group", "all groups", groupOpts));
+    filters.appendChild(mkSelect("jf-tool", "all tools", toolOpts));
+    filters.appendChild(mkSelect("jf-sensitivity", "all sensitivity",
+      ["passive", "active", "disruptive"]));
+    filters.appendChild(mkSelect("jf-time", "all time",
+      [
+        { value: "today", label: "today" },
+        { value: "24h", label: "last 24h" },
+        { value: "7d", label: "last 7 days" },
+        { value: "session", label: "this session" },
+      ]));
+    wrap.appendChild(filters);
+
+    const entriesBox = document.createElement("div");
+    entriesBox.className = "journal-entries";
+    entriesBox.id = "journal-entries";
+    wrap.appendChild(entriesBox);
+
+    screen.appendChild(wrap);
+    updateJournalRows(screen);
+  }
+
+  function readJournalFilters() {
+    const filters = {};
+    const g = document.getElementById("jf-group");
+    const t = document.getElementById("jf-tool");
+    const s = document.getElementById("jf-sensitivity");
+    const tr = document.getElementById("jf-time");
+    if (g && g.value) filters.group = g.value;
+    if (t && t.value) filters.tool = t.value;
+    if (s && s.value) filters.sensitivity = s.value;
+    if (tr && tr.value) filters.time_range = tr.value;
+    return filters;
+  }
+
+  function updateJournalRows(screen) {
+    const box = screen.querySelector("#journal-entries");
+    if (!box) return;
+    box.innerHTML = "";
+    const entries = state.journalEntries || [];
+    if (entries.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "journal-empty";
+      empty.textContent = journalQueryInFlight ? "Loading…" : "No journal entries.";
+      box.appendChild(empty);
+      return;
+    }
+    for (const e of entries) box.appendChild(renderJournalRow(e));
+  }
+
+  function renderJournalRow(entry) {
+    const destructive = entry.sensitivity === "disruptive";
+    const row = document.createElement("div");
+    row.className = "journal-row";
+    if (destructive) row.classList.add("journal-row--disruptive");
+    row.dataset.id = entry.id;
+
+    const time = document.createElement("span");
+    time.className = "journal-row__time";
+    time.textContent = formatHHMM(new Date((entry.timestamp || 0) * 1000));
+    row.appendChild(time);
+
+    const dot = document.createElement("span");
+    dot.className = "dot " + (
+      entry.sensitivity === "disruptive" ? "dot--error"
+      : entry.sensitivity === "active" ? "dot--active"
+      : "dot--idle"
+    );
+    row.appendChild(dot);
+
+    const tool = document.createElement("span");
+    tool.className = "journal-row__tool";
+    tool.textContent = entry.tool_name || "—";
+    row.appendChild(tool);
+
+    const summary = document.createElement("span");
+    summary.className = "journal-row__summary";
+    summary.textContent = entry.result_summary || entry.error || "";
+    row.appendChild(summary);
+
+    const scope = document.createElement("span");
+    scope.className = "journal-row__scope";
+    scope.textContent = entry.scope_label || "";
+    row.appendChild(scope);
+
+    row.addEventListener("click", () => pushView("journal-entry", { id: entry.id }));
+    return row;
+  }
+
+  function renderJournalEntry(screen) {
+    const id = state.currentViewParams.id;
+    let entry = null;
+    if (Array.isArray(state.journalEntries)) {
+      entry = state.journalEntries.find((e) => String(e.id) === String(id)) || null;
+    }
+
+    // Rebuild whenever target entry or its notes change.
+    const stamp = entry ? `${id}:${(entry.notes || "").length}` : String(id);
+    if (screen.dataset.builtFor === "journal-entry:" + stamp) return;
+    screen.dataset.builtFor = "journal-entry:" + stamp;
+    screen.innerHTML = "";
+
+    const wrap = document.createElement("div");
+    wrap.className = "journal-entry-screen";
+
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "back-btn";
+    back.setAttribute("aria-label", "Back");
+    back.innerHTML = '<i class="ph ph-arrow-left"></i><span>BACK</span>';
+    back.addEventListener("click", () => goBack());
+    wrap.appendChild(back);
+
+    if (!entry) {
+      const missing = document.createElement("div");
+      missing.textContent = "Loading entry…";
+      missing.style.color = "var(--ink-tertiary)";
+      missing.style.marginTop = "24px";
+      wrap.appendChild(missing);
+      screen.appendChild(wrap);
+      // Fetch on demand — Pursuit-complete lands here before the list is populated.
+      send({ type: "journal_query", filters: { id: String(id) } });
+      return;
+    }
+
+    const ts = document.createElement("div");
+    ts.className = "journal-entry__timestamp type-mono-xs";
+    ts.textContent = formatTimestampLong(entry.timestamp);
+    wrap.appendChild(ts);
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = entry.tool_name || "—";
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy--short";
+    wrap.appendChild(rule);
+
+    const panels = document.createElement("div");
+    panels.className = "journal-entry__meta-panels";
+
+    const panelA = document.createElement("div");
+    panelA.className = "panel";
+    panelA.appendChild(metaKV("Invoked by", entry.decision === "auto" ? "SYSTEM" : "OPERATOR"));
+    panelA.appendChild(metaKV("Mode", (state.mode || "scholar").toUpperCase()));
+    panelA.appendChild(metaKV("Sensitivity", (entry.sensitivity || "—").toUpperCase()));
+    panels.appendChild(panelA);
+
+    const panelB = document.createElement("div");
+    panelB.className = "panel";
+    panelB.appendChild(metaKV("Scope", formatScopeLine(state.scope).name));
+    panelB.appendChild(metaKV("Decision", (entry.decision || "—").toUpperCase()));
+    panelB.appendChild(metaKV("Duration", entry.duration_ms ? (entry.duration_ms / 1000).toFixed(2) + "s" : "—"));
+    panels.appendChild(panelB);
+    wrap.appendChild(panels);
+
+    const paramsTitle = document.createElement("h3");
+    paramsTitle.className = "type-h3";
+    paramsTitle.textContent = "Parameters";
+    wrap.appendChild(paramsTitle);
+
+    const paramsBlock = document.createElement("div");
+    paramsBlock.className = "mono-block" + (entry.sensitivity === "disruptive" ? " mono-block--destructive" : "");
+    paramsBlock.textContent = formatToolCall(entry.tool_name, entry.arguments || {});
+    wrap.appendChild(paramsBlock);
+
+    if (entry.result_summary || entry.error) {
+      const resultTitle = document.createElement("h3");
+      resultTitle.className = "type-h3";
+      resultTitle.textContent = entry.error ? "Error" : "Result";
+      wrap.appendChild(resultTitle);
+
+      const resultText = document.createElement("p");
+      resultText.className = "type-body";
+      resultText.style.color = entry.error ? "var(--accent-crimson)" : "var(--ink-primary)";
+      resultText.textContent = entry.error || entry.result_summary || "";
+      wrap.appendChild(resultText);
+    }
+
+    const notesTitle = document.createElement("h3");
+    notesTitle.className = "type-h3";
+    notesTitle.textContent = "Notes";
+    wrap.appendChild(notesTitle);
+
+    const notes = document.createElement("textarea");
+    notes.className = "journal-notes";
+    notes.placeholder = "Add notes...";
+    notes.value = entry.notes || "";
+    notes.addEventListener("blur", () => {
+      // Only ship when it actually changed.
+      if (notes.value !== (entry.notes || "")) {
+        send({ type: "journal_update_notes", id: entry.id, notes: notes.value });
+      }
+    });
+    wrap.appendChild(notes);
+
+    screen.appendChild(wrap);
+  }
+
+  function metaKV(k, v) {
+    const row = document.createElement("div");
+    row.className = "meta-kv";
+    const key = document.createElement("span");
+    key.className = "meta-kv__k";
+    key.textContent = k;
+    const val = document.createElement("span");
+    val.className = "meta-kv__v";
+    val.textContent = v || "—";
+    row.appendChild(key);
+    row.appendChild(val);
+    return row;
+  }
+
+  function formatTimestampLong(ts) {
+    if (!ts) return "";
+    const d = new Date(ts * 1000);
+    const hh = String(d.getHours()).padStart(2, "0");
+    const mm = String(d.getMinutes()).padStart(2, "0");
+    const MONTHS = ["JAN","FEB","MAR","APR","MAY","JUN","JUL","AUG","SEP","OCT","NOV","DEC"];
+    return `${hh}:${mm} · ${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()}`;
+  }
+
+  // ── Stage 11 — Settings (spec §10.11 / §12.4) ────────────────
+
+  function renderSettings(screen) {
+    screen.innerHTML = "";
+    const wrap = document.createElement("div");
+    wrap.className = "settings-screen";
+
+    const title = document.createElement("h1");
+    title.className = "type-h1";
+    title.textContent = "SETTINGS";
+    wrap.appendChild(title);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy--short";
+    wrap.appendChild(rule);
+
+    wrap.appendChild(settingsSection("Display", [
+      sliderRow("Brightness", "brightness", state.settings.brightness ?? 80, (v) => {
+        state.settings.brightness = v;
+        saveSettings();
+      }),
+      toggleRow("Animations", !state.settings.reduced_motion, (on) => {
+        state.settings.reduced_motion = !on;
+        saveSettings();
+        document.body.classList.toggle("reduced-motion", !on);
+      }),
+    ]));
+
+    wrap.appendChild(settingsSection("Audio", [
+      sliderRow("Sound", "sound", state.settings.sound ?? 50, (v) => {
+        state.settings.sound = v;
+        saveSettings();
+      }),
+    ]));
+
+    const radioGroups = ["wifi_ble", "sub_ghz", "nfc", "lf_rfid", "ir", "vision"];
+    wrap.appendChild(settingsSection("Radio", radioGroups.map((g) => {
+      const enabled = state.settings[`radio_${g}`] !== false;
+      return toggleRow(
+        ({
+          wifi_ble: "WiFi · BLE",
+          sub_ghz: "Sub-GHz",
+          nfc: "NFC",
+          lf_rfid: "LF RFID",
+          ir: "IR",
+          vision: "Vision",
+        }[g]),
+        enabled,
+        (on) => {
+          state.settings[`radio_${g}`] = on;
+          saveSettings();
+        },
+      );
+    })));
+
+    // Scope history — render scope.set entries from the cached journal.
+    const scopeEntries = (state.journalEntries || []).filter((e) => e.type === "scope_set");
+    if (scopeEntries.length > 0) {
+      const rows = scopeEntries.slice(0, 10).map((e) => {
+        const ts = new Date((e.timestamp || 0) * 1000);
+        const scopeNew = (e.arguments && e.arguments.new) || {};
+        const label = document.createElement("span");
+        label.className = "settings-row__label";
+        label.textContent = `${formatHHMM(ts)} · ${(scopeNew.template || "—").toUpperCase()}`;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn-secondary";
+        btn.textContent = "SWITCH →";
+        btn.addEventListener("click", () => {
+          send({
+            type: "scope_change",
+            template: scopeNew.template,
+            description: scopeNew.description || null,
+          });
+        });
+        const row = document.createElement("div");
+        row.className = "settings-row";
+        row.appendChild(label);
+        row.appendChild(btn);
+        return row;
+      });
+      wrap.appendChild(settingsSection("Scope History", rows));
+    }
+
+    // Diagnostics — v1 placeholders per the prompt.
+    wrap.appendChild(settingsSection("Diagnostics", [
+      diagLink("Hardware health"),
+      diagLink("Log viewer"),
+      diagLink("Temperature"),
+      diagLink("Tokens per second"),
+    ]));
+
+    // Power — confirmation modal before shutting down.
+    const powerRow = document.createElement("div");
+    powerRow.className = "settings-row";
+    const powerBtn = document.createElement("button");
+    powerBtn.type = "button";
+    powerBtn.className = "btn-secondary settings-poweroff";
+    powerBtn.textContent = "POWER OFF";
+    powerBtn.addEventListener("click", openPowerOffModal);
+    powerRow.appendChild(powerBtn);
+    const powerSection = settingsSection("Power", [powerRow]);
+    wrap.appendChild(powerSection);
+
+    // About — pulled from hardcoded constants for v1 (Stage 11 has no
+    // server-side version endpoint).
+    const about = document.createElement("div");
+    about.className = "settings-about";
+    about.innerHTML = [
+      "Faust MK1 · v1.0",
+      "Qwen 2.5-VL 3B on Hailo-10H",
+      "Pi 5 + 8\" DSI · P30B UPS",
+    ].join("<br>");
+    const aboutSection = settingsSection("About", [about]);
+    wrap.appendChild(aboutSection);
+
+    screen.appendChild(wrap);
+  }
+
+  function settingsSection(title, rows) {
+    const section = document.createElement("div");
+    section.className = "settings-section";
+    const header = document.createElement("div");
+    header.className = "settings-section__header";
+    header.textContent = title;
+    section.appendChild(header);
+    for (const r of rows) section.appendChild(r);
+    return section;
+  }
+
+  function sliderRow(label, key, value, onChange) {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    const lbl = document.createElement("span");
+    lbl.className = "settings-row__label";
+    lbl.textContent = label;
+    row.appendChild(lbl);
+
+    const group = document.createElement("span");
+    group.style.display = "flex";
+    group.style.alignItems = "center";
+    group.style.gap = "12px";
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = 0; input.max = 100;
+    input.value = value;
+    input.className = "settings-slider";
+    const val = document.createElement("span");
+    val.className = "settings-row__value";
+    val.textContent = String(value);
+    input.addEventListener("input", () => {
+      const v = Number(input.value);
+      val.textContent = String(v);
+      onChange(v);
+    });
+    group.appendChild(input);
+    group.appendChild(val);
+    row.appendChild(group);
+    return row;
+  }
+
+  function toggleRow(label, on, onChange) {
+    const row = document.createElement("div");
+    row.className = "settings-row";
+    const lbl = document.createElement("span");
+    lbl.className = "settings-row__label";
+    lbl.textContent = label;
+    row.appendChild(lbl);
+
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "settings-toggle" + (on ? " settings-toggle--on" : "");
+    btn.setAttribute("aria-label", label);
+    btn.addEventListener("click", () => {
+      const nextOn = !btn.classList.contains("settings-toggle--on");
+      btn.classList.toggle("settings-toggle--on", nextOn);
+      onChange(nextOn);
+    });
+    row.appendChild(btn);
+    return row;
+  }
+
+  function diagLink(label) {
+    const row = document.createElement("div");
+    row.className = "settings-diag-link";
+    row.textContent = label;
+    row.addEventListener("click", () => showToast(`${label}: not yet wired`));
+    return row;
+  }
+
+  function openPowerOffModal() {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+
+    const modal = document.createElement("div");
+    modal.className = "modal";
+    const header = document.createElement("div");
+    header.className = "modal__header modal__header--destructive";
+    header.textContent = "POWER OFF?";
+    modal.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "modal__body";
+    const p = document.createElement("p");
+    p.className = "modal__consequence";
+    p.textContent = "This shuts down the UI simulator. Any in-flight Pursuit will be stopped.";
+    body.appendChild(p);
+    modal.appendChild(body);
+
+    const btns = document.createElement("div");
+    btns.className = "modal__buttons";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.textContent = "CANCEL";
+    cancel.addEventListener("click", () => closeModal());
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.className = "modal__btn-confirm";
+    confirm.textContent = "POWER OFF";
+    confirm.addEventListener("click", () => {
+      send({ type: "power", action: "off" });
+      closeModal();
+    });
+    btns.appendChild(cancel);
+    btns.appendChild(confirm);
+    modal.appendChild(btns);
+
+    backdrop.appendChild(modal);
+    openModal(backdrop, "scope"); // re-use scope variant (Escape = cancel)
+  }
 
   // ── Stage 9 — modals (spec §7.10 / §10.8 / §10.9 / §10.10) ───
   //
@@ -2064,6 +3058,9 @@
   document.addEventListener("contextmenu", (e) => e.preventDefault());
 
   // ── Initialization ───────────────────────────────────────────
+  // Settings load first so reduced-motion gets applied before anything
+  // renders. Connect + sigils are network-ish; run them in parallel.
+  loadSettings();
   connect();
   // Sigil fetch is async; tiles render with empty boxes until it
   // resolves, then loadSigils() flips viewDirty and re-renders.

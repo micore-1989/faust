@@ -24,6 +24,8 @@ Message types to client (beyond agent events):
   {"type": "state",       "power": "...", "mephisto": "..."}
   {"type": "boot_log",    "line": "..."}
   {"type": "skills",      "skills": [{name, description, category, ...}]}
+  {"type": "journal_entries",      "entries": [...], "filters": {...}}
+  {"type": "journal_entry_updated","id": "...", "notes": "..."}
   {"type": "error",       "message": "..."}
 """
 
@@ -86,6 +88,7 @@ class UIServer:
         # and journal the transition. Both optional for dev/test setups.
         self._trust_cache: Any = None
         self._journal: Any = None
+        self._journal_notes: Any = None
         # Wired by run.py for pursuit_start handling. Dispatcher runs inside
         # the Pursuit implementation; storage records the terminal result.
         self._dispatcher: Any = None
@@ -142,12 +145,16 @@ class UIServer:
         self,
         trust_cache: Any = None,
         journal: Any = None,
+        journal_notes: Any = None,
     ) -> None:
         """Install the server-side disclosure dependencies needed by the
         scope_change handler. Safe to call with either / both as None in
-        dev/test environments."""
+        dev/test environments. `journal_notes` is the Stage 11 operator-
+        editable notes sidecar; optional (server falls back to empty
+        notes when absent)."""
         self._trust_cache = trust_cache
         self._journal = journal
+        self._journal_notes = journal_notes
 
     def set_pursuits(
         self,
@@ -286,6 +293,54 @@ class UIServer:
             )
 
         await self._broadcast_state()
+
+    # ── Journal handlers (spec §10.5 / §10.6) ─────────────────────
+
+    async def _handle_journal_query(self, payload: dict[str, Any]) -> None:
+        """Serialize the journal + notes sidecar and apply AND-filters.
+
+        Dev / test configurations without a wired journal reply with an
+        empty result so the client still renders the view deterministically
+        (rather than silently dropping the message)."""
+        from ..agent.journal_query import query_journal, serialize_entry
+
+        filters = payload.get("filters") or {}
+        if self._journal is None:
+            await self.bridge.push_raw({
+                "type": "journal_entries",
+                "entries": [],
+                "filters": filters,
+            })
+            return
+
+        entries_raw = self._journal.entries()
+        notes_sidecar = self._journal_notes
+        serialized = [
+            serialize_entry(
+                e,
+                notes=notes_sidecar.get(e.seq) if notes_sidecar is not None else "",
+            )
+            for e in entries_raw
+        ]
+        filtered = query_journal(serialized, filters)
+
+        await self.bridge.push_raw({
+            "type": "journal_entries",
+            "entries": filtered,
+            "filters": filters,
+        })
+
+    async def _handle_journal_update_notes(self, payload: dict[str, Any]) -> None:
+        entry_id = payload.get("id")
+        notes = payload.get("notes", "")
+        if entry_id is None or self._journal_notes is None:
+            return
+        self._journal_notes.set(entry_id, notes or "")
+        await self.bridge.push_raw({
+            "type": "journal_entry_updated",
+            "id": str(entry_id),
+            "notes": notes or "",
+        })
 
     # ── Pursuit management ────────────────────────────────────────
 
@@ -523,3 +578,9 @@ class UIServer:
             maybe = self._dispatch_handler(skill, args)
             if hasattr(maybe, "__await__"):
                 await maybe  # type: ignore[misc]
+
+        elif mtype == "journal_query":
+            await self._handle_journal_query(payload)
+
+        elif mtype == "journal_update_notes":
+            await self._handle_journal_update_notes(payload)

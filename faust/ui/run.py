@@ -120,27 +120,166 @@ def _demo_load_skills_catalog() -> list[dict[str, Any]]:
     return _build_skills_catalog(registry)
 
 
-async def push_demo_events(bridge: EventBridge) -> None:
+async def push_demo_events(bridge: EventBridge, server: UIServer | None = None) -> None:
+    """Scripted UI walkthrough for the simulator.
+
+    The demo exercises every Stage 1–11 feature:
+      - scope change             (§10.10)
+      - Mephisto dock ceremony   (§10.13)
+      - two-pass phase markers   (§10.7 / §17.5)
+      - plan-approval modal      (§10.9)
+      - passive + destructive tool calls + confirmation modal (§10.8)
+      - a mini Pursuit with progress / activity / complete    (§10.4.1)
+      - journal entries landed along the way so the Journal tab fills
+
+    Approval modals open but DO NOT gate the demo timeline — in live
+    mode the queued approver awaits the operator, but in demo mode no
+    agent is running. We push the follow-on events on a fixed schedule
+    so the walkthrough always finishes even if the operator ignores
+    the modals. Document this in the stage report.
+    """
+    from ..pursuits.events import PursuitProgress, PursuitActivity, PursuitComplete
+
+    # 0s: boot already ran (server._power_on called before demo started).
     await asyncio.sleep(2)
-    await bridge.push_event(Thinking(text="Scanning for nearby WiFi networks..."))
-    await asyncio.sleep(0.5)
+
+    # 2s: scope change to self-test (§10.10). Routes through the real
+    # handler so the journal + trust cache get the same treatment as
+    # in live mode.
+    if server is not None:
+        await server._handle_incoming({
+            "type": "scope_change",
+            "template": "self-test",
+            "description": None,
+        })
+
+    await asyncio.sleep(3)
+
+    # 5s: Mephisto dock. The server flips state + broadcasts, which
+    # triggers the client's first-dock ceremony automatically.
+    if server is not None:
+        await server._mephisto_connect()
+
+    await asyncio.sleep(4)
+
+    # 9s: two-pass phase markers.
+    await bridge.push_raw({"type": "planning_started", "phase": "catalog", "skill_count": 41})
+    await asyncio.sleep(3)
+    await bridge.push_raw({"type": "planning_started", "phase": "plan", "attempt": 0})
+    await asyncio.sleep(5)
+
+    # 17s: plan approval request.
+    await bridge.push_raw({
+        "type": "plan_approval_request",
+        "plan_id": "demo-plan-1",
+        "reasoning": "Scan the 2.4 GHz band to identify the target AP, then deauth one client to observe WPA re-association.",
+        "steps": [
+            {"skill": "wifi_scan",   "intent": "locate the target BSSID", "critical": False},
+            {"skill": "wifi_deauth", "intent": "drop one associated client", "critical": True},
+        ],
+        "safety_notes": ["Only use against the isolated VLAN router you own."],
+    })
+
+    # Non-blocking auto-advance: the modal opens for the operator, but
+    # the demo timeline pushes follow-ons after a fixed delay.
+    await asyncio.sleep(3)
+
+    # 20s: parameterize + run passive skill.
+    await bridge.push_raw({"type": "parameterizing_step", "step": 1, "of": 2, "skill": "wifi_scan", "intent": "locate target BSSID"})
+    await asyncio.sleep(1)
     await bridge.push_event(ToolCallProposed(
-        call_id="demo-1",
-        tool_name="wifi_scan",
-        arguments={"interface": "wlan1mon", "band": "all"},
+        call_id="demo-1", tool_name="wifi_scan",
+        arguments={"interface": "wlan1mon", "band": "2.4GHz"},
         sensitivity="passive",
     ))
-    await asyncio.sleep(0.3)
+    await asyncio.sleep(1)
     await bridge.push_event(ToolCallExecuted(
-        call_id="demo-1",
-        tool_name="wifi_scan",
+        call_id="demo-1", tool_name="wifi_scan",
         result={"networks": [
-            {"ssid": "TargetNet", "bssid": "aa:bb:cc:dd:ee:ff", "channel": 6,
-             "rssi_dbm": -42, "encryption": "WPA2-PSK"},
-        ], "scan_duration_s": 10},
-        duration_ms=10230,
+            {"ssid": "lab-ap", "bssid": "aa:bb:cc:dd:ee:ff", "channel": 6, "rssi_dbm": -42},
+        ], "scan_duration_s": 8},
+        duration_ms=8120,
     ))
-    await bridge.push_event(Final(reason="end_turn"))
+    # Log to journal so Journal tab shows something.
+    if server is not None and server._journal is not None:
+        server._journal.record(
+            tool_name="wifi_scan",
+            arguments={"interface": "wlan1mon", "band": "2.4GHz"},
+            sensitivity="passive",
+            decision="auto",
+            result_summary="1 network visible (lab-ap · ch6 · -42 dBm)",
+            duration_ms=8120,
+        )
+
+    await asyncio.sleep(1)
+
+    # 23s: parameterize + propose destructive; fire confirmation_request
+    # but don't block — let operator interact or ignore.
+    await bridge.push_raw({"type": "parameterizing_step", "step": 2, "of": 2, "skill": "wifi_deauth", "intent": "drop client"})
+    await asyncio.sleep(1)
+    await bridge.push_event(ToolCallProposed(
+        call_id="demo-2", tool_name="wifi_deauth",
+        arguments={"bssid": "aa:bb:cc:dd:ee:ff", "client": "11:22:33:44:55:66", "count": 5},
+        sensitivity="disruptive",
+    ))
+    await bridge.push_raw({
+        "type": "confirmation_request",
+        "call_id": "demo-confirm-1",
+        "tool_name": "wifi_deauth",
+        "arguments": {"bssid": "aa:bb:cc:dd:ee:ff", "client": "11:22:33:44:55:66", "count": 5},
+        "sensitivity": "disruptive",
+    })
+    await asyncio.sleep(5)
+    await bridge.push_event(ToolCallExecuted(
+        call_id="demo-2", tool_name="wifi_deauth",
+        result={"frames_sent": 5, "target": "11:22:33:44:55:66"},
+        duration_ms=1420,
+    ))
+    if server is not None and server._journal is not None:
+        server._journal.record(
+            tool_name="wifi_deauth",
+            arguments={"bssid": "aa:bb:cc:dd:ee:ff", "client": "11:22:33:44:55:66", "count": 5},
+            sensitivity="disruptive",
+            decision="approved",
+            result_summary="5 deauth frames sent to lab client",
+            duration_ms=1420,
+        )
+
+    await bridge.push_event(Final(reason="end_turn", text="Deauth complete. Client reconnected after 1.2s."))
+
+    await asyncio.sleep(3)
+
+    # 32s: mini Pursuit run (hmc-demo). No real runner — just push the
+    # stream of events the client would see.
+    await bridge.push_event(PursuitProgress(run_id="demo-run", pursuit_id="hmc-demo", progress=0.2, elapsed_s=2, eta_s=8))
+    await asyncio.sleep(1)
+    await bridge.push_event(PursuitActivity(run_id="demo-run", pursuit_id="hmc-demo", line="Starting demo sequence…"))
+    await asyncio.sleep(1)
+    await bridge.push_event(PursuitProgress(run_id="demo-run", pursuit_id="hmc-demo", progress=0.6, elapsed_s=4, eta_s=3))
+    await asyncio.sleep(1)
+    await bridge.push_event(PursuitActivity(run_id="demo-run", pursuit_id="hmc-demo", line="Captured 3 demo SSIDs"))
+    await asyncio.sleep(1)
+    await bridge.push_event(PursuitProgress(run_id="demo-run", pursuit_id="hmc-demo", progress=1.0, elapsed_s=6, eta_s=0))
+
+    # Log the Pursuit to the journal so the complete poster's auto-
+    # navigate-to-journal-entry lands on a real entry.
+    journal_entry_id = None
+    if server is not None and server._journal is not None:
+        entry = server._journal.record(
+            tool_name="pursuit.hmc-demo",
+            arguments={"run_id": "demo-run", "params": {}},
+            sensitivity="passive",
+            decision="auto",
+            result_summary="Demo sequence completed — 3 SSIDs captured, journal entry created",
+        )
+        journal_entry_id = str(entry.seq)
+
+    await bridge.push_event(PursuitComplete(
+        run_id="demo-run", pursuit_id="hmc-demo",
+        summary="Demo sequence completed — 3 SSIDs captured",
+        journal_entry_id=journal_entry_id or "",
+        artifacts=[],
+    ))
 
 
 # ── Live agent wiring ──────────────────────────────────────────
@@ -162,6 +301,9 @@ async def wire_live_agent(bridge: EventBridge, server: UIServer) -> dict[str, An
     # Disclosure layer.
     journal_path = Path(__file__).resolve().parent.parent.parent / "journal.db"
     journal = Journal(str(journal_path))
+    # Stage 11 operator-notes sidecar (mutable, outside the hash chain).
+    from ..agent.journal_notes import JournalNotes
+    journal_notes = JournalNotes(str(journal_path) + ".notes.json")
     confirm = UIConfirmation(bridge, server)
     approver = DisclosureApprover(journal, confirm=confirm)
     # TrustCache wraps DisclosureApprover: a successful approval silences the
@@ -172,7 +314,7 @@ async def wire_live_agent(bridge: EventBridge, server: UIServer) -> dict[str, An
         scope_key_source=lambda: scope_key_from_state(server.state.scope),
     )
     dispatcher = Dispatcher(registry, approver=trust_cache)
-    server.set_disclosure(trust_cache=trust_cache, journal=journal)
+    server.set_disclosure(trust_cache=trust_cache, journal=journal, journal_notes=journal_notes)
 
     # Scoper.
     scoper = None
@@ -314,6 +456,15 @@ async def main() -> None:
         demo_catalog = _demo_load_skills_catalog()
         server.set_skills_catalog(demo_catalog)
         print(f"  loaded skills: {len(demo_catalog)} (demo mode)")
+        # Give the demo a throwaway journal so the Journal tab and the
+        # Pursuit-complete poster's journal-entry hop find real rows.
+        import tempfile
+        from ..agent.journal_notes import JournalNotes
+        demo_journal_dir = Path(tempfile.mkdtemp(prefix="faust-demo-"))
+        demo_journal = Journal(str(demo_journal_dir / "journal.db"))
+        demo_notes = JournalNotes(str(demo_journal_dir / "journal.db.notes.json"))
+        server.set_disclosure(trust_cache=None, journal=demo_journal, journal_notes=demo_notes)
+        print(f"  demo journal: {demo_journal_dir}")
 
     await server.start()
 
@@ -326,7 +477,7 @@ async def main() -> None:
             # In demo mode, bypass the state machine entirely — auto-power-on
             # so you can see the UI without clicking a button.
             await server._power_on()
-            asyncio.create_task(push_demo_events(bridge))
+            asyncio.create_task(push_demo_events(bridge, server))
             while True:
                 await asyncio.sleep(1)
         else:

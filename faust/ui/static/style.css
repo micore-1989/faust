@@ -1076,3 +1076,274 @@ body[data-mode="pact"] .session-info__pact-body--has-text { color: var(--accent-
   color: var(--accent-active);
   margin-top: 48px;
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 11 — Journal (spec §10.5 / §10.6)
+   ────────────────────────────────────────────────────────────── */
+
+.journal-screen { padding: 24px; height: 100%; display: flex; flex-direction: column; }
+.journal-screen .rule-heavy--short { margin-bottom: 16px; }
+.journal-filters { display: flex; gap: 8px; margin: 16px 0; flex-wrap: wrap; }
+.journal-filter {
+  font: 700 11px/1.4 'Jost'; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--ink-secondary); background: transparent;
+  border: 0.5px solid var(--ink-secondary); padding: 8px 12px;
+  cursor: pointer; appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6' fill='%23BCAE92'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+  padding-right: 28px;
+}
+.journal-filter option { background: var(--bg-secondary); color: var(--ink-primary); }
+.journal-entries { flex: 1; overflow-y: auto; }
+.journal-row {
+  display: grid;
+  grid-template-columns: 60px 16px 160px 1fr 120px;
+  gap: 12px; align-items: center;
+  height: 48px; padding: 0 8px;
+  cursor: pointer;
+  font: 400 12px/1.6 'JetBrains Mono'; color: var(--ink-secondary);
+}
+.journal-row:active { background: var(--bg-secondary); }
+.journal-row__time { color: var(--ink-tertiary); }
+.journal-row__tool { color: var(--ink-primary); font-weight: 500; }
+.journal-row--disruptive .journal-row__tool { color: var(--accent-crimson); }
+.journal-row__scope {
+  color: var(--accent-scope); font-size: 10px;
+  letter-spacing: 0.12em; text-transform: uppercase; text-align: right;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.journal-empty { color: var(--ink-quiet); padding: 24px 0; text-align: center; }
+
+.journal-entry-screen { padding: 24px; overflow-y: auto; height: 100%; }
+.journal-entry__timestamp { color: var(--ink-tertiary); margin-bottom: 8px; }
+.journal-entry__meta-panels {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin: 24px 0;
+}
+.journal-entry__meta-panels .panel { padding: 16px 20px; }
+.meta-kv { display: flex; justify-content: space-between; padding: 6px 0; gap: 16px; }
+.meta-kv__k {
+  color: var(--ink-tertiary);
+  font: 400 11px/1.4 'JetBrains Mono';
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+.meta-kv__v {
+  color: var(--ink-primary);
+  font: 500 12px/1.4 'JetBrains Mono';
+  text-align: right;
+}
+.journal-notes {
+  width: 100%; height: 120px;
+  font: 400 13px/1.6 'JetBrains Mono';
+  color: var(--ink-primary);
+  background: var(--bg-deep);
+  border: none; padding: 12px 16px;
+  outline: none; resize: vertical;
+  margin-top: 8px;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 11 — Pursuits (spec §10.4 / §10.4.1 / §10.4.2)
+   ────────────────────────────────────────────────────────────── */
+
+.pursuits-screen { padding: 24px; height: 100%; overflow-y: auto; }
+.pursuits-screen .rule-heavy--short { margin-bottom: 16px; }
+.pursuit-grid {
+  display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px;
+  margin-top: 24px;
+}
+.pursuit-card {
+  padding: 24px; background: var(--bg-secondary);
+  border: 0.5px solid var(--tile-border);
+  cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; min-height: 180px;
+}
+.pursuit-card:active { background: var(--bg-deep); }
+.pursuit-card--custom { border-style: dashed; }
+.pursuit-card--custom .pursuit-card__title { color: var(--ink-secondary); }
+.pursuit-card__title {
+  font: 700 22px/1.1 'Jost'; letter-spacing: -0.005em;
+  text-transform: uppercase; color: var(--ink-primary); margin: 0 0 12px;
+}
+.pursuit-card__desc {
+  font: 400 14px/1.5 'Jost';
+  color: var(--ink-secondary); flex: 1; margin: 0 0 16px;
+}
+.pursuit-card__meta {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary); display: flex; gap: 16px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+}
+
+.pursuit-detail-screen,
+.pursuit-running-screen { padding: 24px; overflow-y: auto; height: 100%; }
+
+.pursuit-detail-screen .rule-heavy--short { margin-bottom: 24px; }
+.pursuit-detail__desc { margin-bottom: 16px; color: var(--ink-secondary); }
+.pursuit-detail__meta {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin-bottom: 16px;
+}
+.pursuit-detail__actions {
+  display: flex; gap: 12px; justify-content: flex-end;
+  margin-top: 32px;
+}
+
+.pursuit-running__status {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary);
+  letter-spacing: 0.08em; text-transform: uppercase;
+  margin-bottom: 12px;
+}
+.pursuit-progress {
+  height: 3px; width: 100%; background: var(--bg-deep);
+  margin: 16px 0;
+}
+.pursuit-progress__fill {
+  height: 100%; background: var(--accent-active);
+  transition: width 300ms ease-out;
+}
+.pursuit-activity { margin-top: 16px; }
+.pursuit-activity__line {
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary); padding: 4px 0;
+}
+.pursuit-activity__line:first-child { color: var(--ink-primary); }
+.pursuit-running__actions {
+  display: flex; gap: 12px; justify-content: flex-end;
+  margin-top: 32px;
+}
+
+.pursuit-complete-overlay {
+  position: fixed; inset: 0; z-index: 150;
+  background: var(--bg-primary);
+  display: flex; align-items: center; justify-content: center;
+  text-align: center;
+  opacity: 0; transition: opacity 200ms ease-out;
+}
+.pursuit-complete-overlay--visible { opacity: 1; }
+.pursuit-complete__title {
+  font: 900 72px/1 'Jost';
+  color: var(--ink-primary);
+  text-transform: uppercase;
+}
+.pursuit-complete__rule {
+  width: 120px; height: 3px;
+  background: var(--accent-crimson);
+  margin: 24px auto;
+}
+.pursuit-complete__label {
+  font: 700 28px/1.1 'Jost';
+  letter-spacing: 0.02em; text-transform: uppercase;
+  color: var(--accent-scope); margin-top: 24px;
+}
+.pursuit-complete__summary {
+  font: 400 14px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary); margin-top: 24px;
+}
+.pursuit-complete__circle {
+  width: 240px; height: 240px;
+  border: 4px solid var(--accent-crimson);
+  border-radius: 50%;
+  margin: 32px auto 0;
+}
+.pursuit-complete__diamond {
+  font-size: 24px;
+  color: var(--accent-active);
+  margin-top: 24px;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 11 — Settings (spec §10.11 / §12.4)
+   ────────────────────────────────────────────────────────────── */
+
+.settings-screen { padding: 24px; overflow-y: auto; height: 100%; }
+.settings-section { margin-bottom: 32px; }
+.settings-section__header {
+  font: 700 12px/1.4 'Jost';
+  letter-spacing: 0.18em; text-transform: uppercase;
+  color: var(--ink-secondary);
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 16px;
+}
+.settings-section__header::after {
+  content: ''; flex: 1; height: 0.5px; background: var(--tile-border);
+}
+.settings-row {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0;
+  gap: 16px;
+}
+.settings-row__label { font: 400 14px/1.5 'Jost'; color: var(--ink-primary); }
+.settings-row__value {
+  font: 400 11px/1.4 'JetBrains Mono';
+  color: var(--ink-tertiary);
+  min-width: 48px; text-align: right;
+}
+.settings-slider {
+  -webkit-appearance: none; appearance: none;
+  width: 200px; height: 4px;
+  background: var(--bg-deep); outline: none;
+}
+.settings-slider::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 16px; height: 16px;
+  background: var(--ink-primary); cursor: pointer;
+}
+.settings-toggle {
+  width: 16px; height: 16px;
+  border: 1px solid var(--ink-secondary);
+  cursor: pointer; background: transparent;
+  padding: 0;
+}
+.settings-toggle--on {
+  background: var(--accent-active);
+  border-color: var(--accent-active);
+}
+.settings-about {
+  font: 400 12px/1.8 'JetBrains Mono';
+  color: var(--ink-secondary);
+}
+.settings-diag-link {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 12px 0; cursor: pointer;
+  color: var(--ink-primary);
+  font: 400 14px/1.5 'Jost';
+}
+.settings-diag-link::after {
+  content: '›'; color: var(--ink-tertiary); font-size: 20px;
+}
+.settings-poweroff {
+  color: var(--accent-crimson);
+  border-color: var(--accent-crimson);
+}
+.settings-poweroff:active {
+  background: var(--accent-crimson);
+  color: var(--ink-primary);
+}
+
+/* Reduced-motion toggle (spec §12.4). Applied on <body> by the
+   settings handler; disables all transitions and animations. */
+body.reduced-motion,
+body.reduced-motion * {
+  transition-duration: 0ms !important;
+  animation-duration: 0ms !important;
+}
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 11 — Error toast
+   ────────────────────────────────────────────────────────────── */
+
+.error-toast {
+  position: fixed; top: 0; left: 0; right: 0;
+  padding: 12px 24px;
+  background: var(--accent-crimson);
+  color: var(--ink-primary);
+  font: 500 12px/1.4 'JetBrains Mono';
+  letter-spacing: 0.08em;
+  z-index: 300;
+  transform: translateY(-100%);
+  transition: transform 200ms ease-out;
+}
+.error-toast--visible { transform: translateY(0); }
