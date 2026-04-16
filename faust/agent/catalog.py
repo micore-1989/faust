@@ -54,7 +54,34 @@ _CATEGORY_PREFIXES: dict[str, str] = {
 }
 
 
-def _categorize(name: str) -> str:
+# Remap the 11 raw categories into the 7 sigil groups the UI dashboard
+# renders (see faust-ui-spec.md §8.3, §16.2). One source of truth; the UI
+# always receives one of exactly seven category strings.
+SIGIL_GROUP_MAP: dict[str, str] = {
+    "wifi": "wifi_ble",
+    "ble": "wifi_ble",
+    "network": "wifi_ble",
+    "nfc": "nfc",
+    "rfid": "lf_rfid",
+    "subghz": "sub_ghz",
+    "rf": "sub_ghz",
+    "ir": "ir",
+    "vision": "vision",
+    "usb": "meta",
+    "analysis": "meta",
+    "defense": "meta",
+}
+
+
+def _raw_categorize(name: str) -> str:
+    """Original 11-category prefix/exact-match logic, plus vision detection.
+
+    Vision-based skills (picamera2-backed or camera/vision in the name) take
+    precedence over the prefix table so `camera_ir_scan` lands in `vision`
+    rather than `defense`."""
+    lower = name.lower()
+    if "camera" in lower or "vision" in lower:
+        return "vision"
     # Exact-name matches win over prefix matches (e.g. `ble_tracker_scan`
     # is defense, not ble, even though it starts with `ble_`).
     if name in _CATEGORY_PREFIXES:
@@ -63,6 +90,13 @@ def _categorize(name: str) -> str:
         if prefix.endswith("_") and name.startswith(prefix):
             return cat
     return "misc"
+
+
+def _categorize(name: str) -> str:
+    """Return one of the seven sigil groups. Everything unmapped falls to
+    `meta` so the dashboard never renders a dead tile."""
+    raw = _raw_categorize(name)
+    return SIGIL_GROUP_MAP.get(raw, "meta")
 
 
 @dataclass

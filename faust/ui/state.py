@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
+from typing import Any, Literal, Optional
 
 
 class Power(str, Enum):
@@ -34,11 +34,43 @@ class Mephisto(str, Enum):
 
 
 @dataclass
+class ScopeState:
+    """Operator-declared scope for the session. Nullable until set."""
+    template: Optional[Literal["recon", "self-test", "pentesting"]] = None
+    description: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "template": self.template,
+            "description": self.description,
+        }
+
+
+@dataclass
+class BatteryState:
+    """UPS battery indicator. Values are polled from the X1202/X1201 HAT
+    on real hardware; the simulator hard-codes a plausible default."""
+    percent: int = 82
+    charging: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "percent": self.percent,
+            "charging": self.charging,
+        }
+
+
+@dataclass
 class SimulatorState:
     power: Power = Power.OFF
     mephisto: Mephisto = Mephisto.DISCONNECTED
     # Boot progress 0-100 when BOOTING. Clients render as percentage.
     boot_progress: int = 0
+    scope: ScopeState = field(default_factory=ScopeState)
+    battery: BatteryState = field(default_factory=BatteryState)
+    # Gates the first-dock ceremony (§10.13). True on boot; the server
+    # clears it after the first CONNECTED transition broadcasts.
+    first_dock_this_boot: bool = True
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -46,6 +78,9 @@ class SimulatorState:
             "power": self.power.value,
             "mephisto": self.mephisto.value,
             "boot_progress": self.boot_progress,
+            "scope": self.scope.to_dict(),
+            "battery": self.battery.to_dict(),
+            "first_dock_this_boot": self.first_dock_this_boot,
         }
 
     def can_accept_prompt(self) -> bool:

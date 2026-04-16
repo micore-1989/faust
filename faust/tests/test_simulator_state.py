@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from faust.ui.bridge import EventBridge
 from faust.ui.server import UIServer
-from faust.ui.state import Mephisto, Power, SimulatorState
+from faust.ui.state import BatteryState, Mephisto, Power, ScopeState, SimulatorState
 
 
 # ── Pure state tests ────────────────────────────────────────────
@@ -179,6 +179,113 @@ async def test_state_broadcasts_to_subscribers():
     print("✓ state changes broadcast to all subscribers")
 
 
+async def test_scope_state_defaults_and_serialization():
+    s = ScopeState()
+    assert s.template is None and s.description is None
+    assert s.to_dict() == {"template": None, "description": None}
+
+    s = ScopeState(template="recon", description="coffee shop audit")
+    assert s.to_dict() == {
+        "template": "recon",
+        "description": "coffee shop audit",
+    }
+    print("✓ ScopeState defaults to nulls and round-trips to dict")
+
+
+async def test_battery_state_defaults_and_serialization():
+    b = BatteryState()
+    assert b.percent == 82 and b.charging is False
+    assert b.to_dict() == {"percent": 82, "charging": False}
+
+    b = BatteryState(percent=17, charging=True)
+    assert b.to_dict() == {"percent": 17, "charging": True}
+    print("✓ BatteryState defaults and round-trips to dict")
+
+
+async def test_state_dict_includes_new_fields():
+    """Spec §11.1: state shape now carries scope, battery, first_dock_this_boot."""
+    s = SimulatorState(
+        power=Power.ON,
+        mephisto=Mephisto.CONNECTED,
+        scope=ScopeState(template="pentesting", description="red-team engagement"),
+        battery=BatteryState(percent=55, charging=True),
+        first_dock_this_boot=False,
+    )
+    d = s.to_dict()
+    assert d["type"] == "state"
+    assert d["power"] == "on"
+    assert d["mephisto"] == "connected"
+    assert d["scope"] == {
+        "template": "pentesting",
+        "description": "red-team engagement",
+    }
+    assert d["battery"] == {"percent": 55, "charging": True}
+    assert d["first_dock_this_boot"] is False
+    print("✓ state dict roundtrips scope / battery / first_dock_this_boot")
+
+
+async def test_default_state_dict_has_sane_defaults():
+    """A freshly-constructed state serializes with the documented defaults."""
+    d = SimulatorState().to_dict()
+    assert d["scope"] == {"template": None, "description": None}
+    assert d["battery"]["percent"] == 82
+    assert d["battery"]["charging"] is False
+    assert d["first_dock_this_boot"] is True
+    print("✓ default SimulatorState.to_dict() carries documented defaults")
+
+
+async def test_first_dock_flag_clears_after_first_connect():
+    """First mephisto connect broadcasts state with first_dock_this_boot=True,
+    then the server clears the flag so subsequent reconnects are silent."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+    q = bridge.subscribe()
+
+    server.state.power = Power.ON
+    assert server.state.first_dock_this_boot is True
+
+    # First dock.
+    await server._mephisto_connect()
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["mephisto"] == "connected"
+    assert msg["first_dock_this_boot"] is True, (
+        "first dock state must arrive with flag still True so the UI runs ceremony"
+    )
+    # Server clears the flag after broadcasting.
+    assert server.state.first_dock_this_boot is False
+
+    # Disconnect + reconnect within same boot: flag stays False.
+    await server._mephisto_disconnect()
+    await q.get()  # drain disconnect state
+    await server._mephisto_connect()
+    msg = await asyncio.wait_for(q.get(), timeout=1.0)
+    assert msg["first_dock_this_boot"] is False, (
+        "second dock in same boot must be silent (no re-ceremony)"
+    )
+
+    bridge.unsubscribe(q)
+    print("✓ first_dock_this_boot clears after first connect, stays cleared")
+
+
+async def test_power_off_rearms_first_dock_flag():
+    """Power cycle re-arms the ceremony so the next boot fires it again."""
+    bridge = EventBridge()
+    server = UIServer(bridge, port=0)
+
+    # Simulate a boot + first dock that already consumed the flag.
+    server.state.power = Power.ON
+    server.state.mephisto = Mephisto.CONNECTED
+    server.state.first_dock_this_boot = False
+
+    await server._power_off()
+    assert server.state.power == Power.OFF
+    assert server.state.mephisto == Mephisto.DISCONNECTED
+    assert server.state.first_dock_this_boot is True, (
+        "power-off must re-arm first_dock_this_boot for the next boot"
+    )
+    print("✓ power-off resets first_dock_this_boot to True")
+
+
 async def test_skills_catalog_sent_on_connect_when_booted():
     """A client reconnecting to a running server should receive the catalog."""
     bridge = EventBridge()
@@ -209,6 +316,12 @@ async def main():
     await test_mephisto_connect_requires_power_on()
     await test_power_off_disconnects_mephisto()
     await test_state_broadcasts_to_subscribers()
+    await test_scope_state_defaults_and_serialization()
+    await test_battery_state_defaults_and_serialization()
+    await test_state_dict_includes_new_fields()
+    await test_default_state_dict_has_sane_defaults()
+    await test_first_dock_flag_clears_after_first_connect()
+    await test_power_off_rearms_first_dock_flag()
     await test_skills_catalog_sent_on_connect_when_booted()
     print("\nall simulator state tests passed")
 
