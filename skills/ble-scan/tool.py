@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import fake_ble_device, mark_synthetic, _rng
+from faust.skills.fakes import fake_ble_device, mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     duration_s = int(args.get("duration_s", 10))
     filter_name = (args.get("filter_name") or "").lower()
     filter_rssi = args.get("filter_rssi")
@@ -25,8 +26,22 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
     # Sort by signal strength.
     devices.sort(key=lambda d: -d["rssi_dbm"])
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "devices": devices,
         "scan_duration_s": duration_s,
         "total_advertisements": sum(rng.randint(1, 40) for _ in devices),
     })
+
+    connectable = [d for d in devices if d.get("connectable")]
+    named = [d for d in devices if d.get("name")]
+    strongest = devices[0] if devices else None
+    summary = pack_summary({
+        "devices_found": len(devices),
+        "connectable": len(connectable),
+        "named": len(named),
+        "strongest": (
+            {"name": strongest["name"], "mac": strongest["mac"], "rssi_dbm": strongest["rssi_dbm"]}
+            if strongest else None
+        ),
+    })
+    return ToolResult(result=result, summary=summary)

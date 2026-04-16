@@ -30,9 +30,21 @@ parameters_schema:
         channels in the selected band.
   required:
     - interface
+typical_duration_s: 15
 sensitivity: passive
 allowed_tools:
   - wifi_scan
+pivot_hints:
+  - when: "summary.networks_found == 0"
+    suggest: "No WiFi found in the selected band. Try the other band, or fall back to ble_scan / rf_spectrum_scan to characterize the environment."
+  - when: "summary.with_clients >= 1"
+    suggest: "At least one AP has active clients — wifi_handshake_capture against summary.best_handshake_target is the standard next move."
+  - when: "summary.with_clients == 0"
+    suggest: "No APs have clients; handshake capture will time out. Prefer wifi_pmkid_capture (no client needed) or wifi_karma to lure clients."
+  - when: "summary.karma_candidates >= 1"
+    suggest: "Open networks with clients present — wifi_karma will rapidly attract associations from nearby devices probing for open SSIDs."
+  - when: "summary.open_networks >= 1"
+    suggest: "Open networks are present — wifi_evil_portal can impersonate one to harvest credentials."
 ---
 
 # WiFi Scan

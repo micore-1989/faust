@@ -22,6 +22,13 @@ Architecture:
       - Faust dispatches, emits events, records in journal
       - Result feeds into context for next step
 
+  Feedforward summary channel
+    Each step's result can come with a compact `summary` dict (skill opts in
+    by returning ToolResult(result=..., summary=...)). The executor prefers
+    the summary over the full result when building Pass 2 context for later
+    steps and when building the re-plan prompt. Keeps prompts small,
+    structured, and parseable by the 1.5B parameterizer.
+
 This matches the "Mephisto advises, Faust executes" rule. Mephisto's per-call
 context is constant-size regardless of how many skills exist. Faust holds the
 authoritative registry and is the only thing that invokes tools.
@@ -36,6 +43,7 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from .backends import AssistantMessage, LLMBackend
+from .cache import ResultCache
 from .catalog import build_catalog
 from .config import AgentConfig
 from .dispatch import Dispatcher
@@ -47,6 +55,7 @@ from .events import (
     ToolCallExecuted,
     ToolCallProposed,
 )
+from .pivots import matching_suggestions
 from .plan import Plan, PlanStep
 from .planner import Planner
 from ..skills.scoper import SkillScoper
@@ -72,8 +81,18 @@ Rules:
   - Call the provided tool exactly once. No freeform response.
   - If earlier steps produced relevant data (MAC addresses, SSIDs, coordinates),
     use those in your parameters — don't invent values.
-  - If required parameters cannot be determined, make safe defaults where
-    possible, or leave optional fields empty.
+  - Prior step summaries often name the canonical target via opinion fields:
+      * `best_handshake_target` (from wifi_scan) → use as `bssid`
+      * `first_hash_file` (from pcap_inspect / capture skills) → use as
+        `hash_file` for crack steps
+      * `rogue_bssid` (from rogue_ap_detector) → target for counter-ops
+      * `attacker_mac` (from deauth_detector) → source to block / track
+    Cite these directly instead of parsing them out of the full result.
+  - If a required parameter cannot be determined from the summaries and the
+    tool schema shows no `default`, leave the field absent — the tool will
+    validate or error cleanly. Never invent MACs, IPs, hashes, or file paths.
+  - If a parameter has a `default` in the schema, you MAY omit it; the
+    registry will fill it. Only include it if you have a reason to override.
 """
 
 
@@ -88,6 +107,7 @@ class TwoPassAgent:
         scoper: SkillScoper | None = None,
         plan_approver: PlanApprover | None = None,
         deep_backend: LLMBackend | None = None,
+        cache: ResultCache | None = None,
     ) -> None:
         self.backend = backend
         self.deep_backend = deep_backend
@@ -96,6 +116,10 @@ class TwoPassAgent:
         self.scoper = scoper
         self.plan_approver = plan_approver or _auto_approve_plan
         self.planner = Planner(backend, deep_backend=deep_backend)
+        # Session-lived short-TTL cache of successful skill summaries.
+        # The planner sees a "Known recent results" section so follow-up
+        # prompts can skip re-scanning.
+        self.cache = cache if cache is not None else ResultCache()
 
     async def run(
         self,
@@ -120,9 +144,13 @@ class TwoPassAgent:
             return
 
         history = self._trim_history(conversation_history)
+        cache_section = self.cache.render_prompt_section()
 
         try:
-            plan = await self.planner.plan(user_input, catalog, history=history)
+            plan = await self.planner.plan(
+                user_input, catalog, history=history,
+                cache_section=cache_section,
+            )
         except Exception as e:
             yield Final(reason="error", error=f"planner failed: {type(e).__name__}: {e}")
             return
@@ -149,6 +177,9 @@ class TwoPassAgent:
 
         # ── Pass 2: execute each step ───────────────────────────────
         step_results: list[dict[str, Any]] = []
+        # Hints produced by matching pivot_hints on the most recent step's
+        # summary. Consumed by the next _parameterize_step, then cleared.
+        pending_hints: list[str] = []
         replans_used = 0
         # Worklist of steps remaining — can be rewritten by a re-plan.
         remaining: list[PlanStep] = list(plan.steps)
@@ -179,7 +210,9 @@ class TwoPassAgent:
                     step=step,
                     tool_schema=tool.to_openai_schema(),
                     step_results=step_results,
+                    pending_hints=pending_hints,
                 )
+                pending_hints = []
             except Exception as e:
                 yield Final(
                     reason="error",
@@ -210,8 +243,29 @@ class TwoPassAgent:
                 "intent": step.intent,
                 "executed": result.executed,
                 "result": result.result,
+                "summary": result.summary,
                 "error": result.error,
             })
+
+            # ── Cache the summary so follow-up turns can skip re-scans ──
+            # TTL depends on sensitivity (disruptive = never cached).
+            if result.error is None and result.summary is not None:
+                self.cache.store(
+                    skill=step.skill,
+                    args=tool_call.get("arguments", {}),
+                    summary=result.summary,
+                    sensitivity=tool.sensitivity,
+                )
+
+            # ── Pivot hints ────────────────────────────────────────
+            # If the skill's frontmatter declared pivot_hints and this
+            # step's summary matches any of them, queue the suggestions
+            # for the next step's parameter-generation prompt. Cheap
+            # reactive planning without paying a full re-plan.
+            if result.error is None and result.summary is not None and tool.pivot_hints:
+                matched = matching_suggestions(tool.pivot_hints, result.summary)
+                if matched:
+                    pending_hints.extend(f"{step.skill}: {s}" for s in matched)
 
             if result.error == "user_rejected":
                 yield Final(reason="user_abort")
@@ -228,22 +282,41 @@ class TwoPassAgent:
                 and remaining  # only worth re-planning if there's still work
             ):
                 replans_used += 1
+                # Surface what each completed step actually learned, not just
+                # its name — lets the re-planner reason about real results
+                # instead of guessing.
+                completed_lines = []
+                for r in step_results:
+                    if r.get("error"):
+                        completed_lines.append(
+                            f"  - {r['skill']} → ERROR: {str(r['error'])[:80]}"
+                        )
+                    elif r.get("summary") is not None:
+                        completed_lines.append(
+                            f"  - {r['skill']} → {json.dumps(r['summary'], default=str)}"
+                        )
+                    elif r.get("executed"):
+                        completed_lines.append(f"  - {r['skill']} → completed")
+                completed = "\n".join(completed_lines) or "  (none)"
+
                 replan_prompt = (
                     f"ORIGINAL REQUEST: {user_input}\n\n"
                     f"The plan encountered an error at step `{step.skill}`: "
                     f"{result.error}\n\n"
-                    f"Steps completed so far: "
-                    f"{[r['skill'] for r in step_results]}\n\n"
+                    f"Steps completed so far (with their outcomes):\n"
+                    f"{completed}\n\n"
                     f"Remaining steps that were planned: "
                     f"{[s.skill for s in remaining]}\n\n"
-                    f"Given what you now know, revise the plan. Return only the "
-                    f"REMAINING steps to accomplish the original request — do "
-                    f"not repeat completed steps. If the request is no longer "
-                    f"achievable, return an empty plan explaining why."
+                    f"Given what you now know from the outcomes above, revise "
+                    f"the plan. Return only the REMAINING steps to accomplish "
+                    f"the original request — do not repeat completed steps. If "
+                    f"the request is no longer achievable, return an empty "
+                    f"plan explaining why."
                 )
                 try:
                     new_plan = await self.planner.plan(
                         replan_prompt, catalog, history=history,
+                        cache_section=self.cache.render_prompt_section(),
                     )
                 except Exception:
                     # Re-plan failed — fall through to original remaining steps.
@@ -312,6 +385,7 @@ class TwoPassAgent:
         step: PlanStep,
         tool_schema: dict[str, Any],
         step_results: list[dict[str, Any]],
+        pending_hints: list[str] | None = None,
     ) -> dict[str, Any]:
         """Pass 2 LLM call — generate parameters for one step, given one schema."""
         history_summary = ""
@@ -320,7 +394,15 @@ class TwoPassAgent:
             for r in step_results:
                 if r.get("error"):
                     lines.append(f"- {r['skill']}: error: {r['error']}")
+                elif r.get("summary") is not None:
+                    # Prefer the skill's own compact summary — structured,
+                    # bounded, guaranteed-parseable. Keeps Pass 2 context small.
+                    lines.append(
+                        f"- {r['skill']}: {json.dumps(r['summary'], default=str)}"
+                    )
                 elif r.get("executed"):
+                    # Legacy path: crude truncation of the full result.
+                    # Shreds JSON at the boundary but the big model can cope.
                     result_repr = json.dumps(r.get("result"), default=str)[:800]
                     lines.append(f"- {r['skill']}: {result_repr}")
             history_summary = "\n".join(lines)
@@ -332,6 +414,14 @@ class TwoPassAgent:
         )
         if history_summary:
             step_context += f"\nEarlier step results:\n{history_summary}\n"
+        if pending_hints:
+            step_context += (
+                f"\nHints from the previous step (domain knowledge baked "
+                f"into its SKILL.md). Use these to inform your parameter "
+                f"choices when relevant:\n"
+                + "\n".join(f"  - {h}" for h in pending_hints)
+                + "\n"
+            )
         step_context += f"\nCall the `{step.skill}` tool with appropriate parameters."
 
         messages = [

@@ -38,6 +38,7 @@ parameters_schema:
         repeats. Default 3.
   required:
     - action
+typical_duration_s: 15
 sensitivity: active
 allowed_tools:
   - ir_capture

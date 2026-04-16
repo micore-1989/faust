@@ -31,6 +31,7 @@ parameters_schema:
       description: >
         How long to wait for card presentation in seconds. Default 10.
   required: []
+typical_duration_s: 5
 sensitivity: active
 allowed_tools:
   - rfid_clone

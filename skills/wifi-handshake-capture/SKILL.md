@@ -9,29 +9,33 @@ parameters_schema:
   properties:
     interface:
       type: string
-      description: Monitor-mode WiFi interface (e.g. wlan1mon)
+      description: Monitor-mode WiFi interface.
+      default: wlan1mon
     bssid:
       type: string
-      description: Target access point BSSID (MAC address)
+      description: Target access point BSSID. Pre-fill from best_handshake_target of a prior wifi_scan summary when available.
     channel:
       type: integer
-      description: Channel of the target AP (lock scanner to this channel)
+      description: Channel of the target AP. Pre-fill from top_3[].channel in the matching wifi_scan entry.
+      default: 6
     timeout_s:
       type: integer
-      description: >
-        How long to listen before giving up. A client must associate within
-        this window. Default 60.
+      description: How long to listen before giving up. A client must associate within this window.
+      default: 120
     output_file:
       type: string
-      description: >
-        PCAP output path. Defaults to captures/handshake_<bssid>_<ts>.pcap
+      description: PCAP output path. Defaults to captures/handshake_<bssid>_<ts>.pcap when omitted.
   required:
-    - interface
     - bssid
-    - channel
+typical_duration_s: 120
 sensitivity: active
 allowed_tools:
   - wifi_handshake_capture
+pivot_hints:
+  - when: "summary.captured == true"
+    suggest: "Handshake captured — hash_file is at summary.hash_file. wpa_crack can now attempt offline brute force with a wordlist."
+  - when: "summary.captured == false"
+    suggest: "No client reconnected within the timeout. Consider wifi_deauth against an associated client (from a prior wifi_scan) to force reassociation, or switch to wifi_pmkid_capture which does not require a client."
 ---
 
 # WiFi Handshake Capture

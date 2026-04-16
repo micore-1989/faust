@@ -9,23 +9,26 @@ parameters_schema:
   properties:
     interface:
       type: string
-      description: Interface on the target network
+      description: Interface on the target network.
+      default: eth0
     target_ip:
       type: string
-      description: Victim IP to poison
+      description: Victim IP to poison. Pre-fill from a prior arp_scan summary (hosts[].ip) when available.
     gateway_ip:
       type: string
-      description: Gateway IP to impersonate (typically the real router)
+      description: Gateway IP to impersonate (typically the real router). Pre-fill from arp_scan summary gateway field when available.
     forward:
       type: boolean
-      description: Enable IP forwarding so target retains connectivity. Default true.
+      description: Enable IP forwarding so target retains connectivity. Set false only for deliberate traffic blackhole.
+      default: true
     duration_s:
       type: integer
-      description: How long to sustain the poison. 0 = until manually stopped. Default 0.
+      description: How long to sustain the poison. 0 = until manually stopped.
+      default: 0
   required:
-    - interface
     - target_ip
     - gateway_ip
+typical_duration_s: 30
 sensitivity: disruptive
 allowed_tools:
   - arp_spoof

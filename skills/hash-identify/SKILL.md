@@ -11,6 +11,7 @@ parameters_schema:
       description: The hash to identify (hex, base64, or formatted like $6$...)
   required:
     - hash_string
+typical_duration_s: 2
 sensitivity: passive
 allowed_tools:
   - hash_identify

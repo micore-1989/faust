@@ -23,6 +23,7 @@ parameters_schema:
       type: integer
       description: Observation duration per scan. Default 60.
   required: []
+typical_duration_s: 60
 sensitivity: passive
 allowed_tools:
   - spectrum_anomaly

@@ -1,9 +1,8 @@
 ---
 name: rogue_ap_detector
 description: >
-  Detect rogue access points and evil twins by cross-referencing nearby
-  APs against a whitelist of known BSSIDs. Flags duplicates (same SSID,
-  different BSSID) and unauthorized broadcasts. Passive — listens only.
+  Defense: flag evil-twin APs broadcasting a whitelist SSID from an
+  unauthorized BSSID, and enumerate unknown nearby access points.
 parameters_schema:
   type: object
   properties:
@@ -31,9 +30,15 @@ parameters_schema:
         scans — may indicate spoofing or position change. Default 20.
   required:
     - interface
+typical_duration_s: 60
 sensitivity: passive
 allowed_tools:
   - rogue_ap_detector
+pivot_hints:
+  - when: "summary.evil_twins >= 1"
+    suggest: "Evil twin detected for SSID summary.victim_ssid on BSSID summary.rogue_bssid. Operator decision: (a) wifi_deauth against the rogue to protect legit clients, (b) alert-only, (c) evidence collection via wifi_handshake_capture scoped to the rogue."
+  - when: "summary.unknown_aps >= 5"
+    suggest: "Many unknown APs present — environment may be congested or the whitelist may be incomplete. Consider updating the whitelist before treating this as a threat signal."
 ---
 
 # Rogue AP Detector

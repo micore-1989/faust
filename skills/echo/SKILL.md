@@ -9,6 +9,7 @@ parameters_schema:
       description: Text to echo back
   required:
     - text
+typical_duration_s: 1
 sensitivity: passive
 allowed_tools:
   - echo

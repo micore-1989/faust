@@ -22,6 +22,7 @@ parameters_schema:
       description: Wait between attempts. Too fast triggers rate limits. Default 500.
   required:
     - mac
+typical_duration_s: 240
 sensitivity: disruptive
 allowed_tools:
   - ble_pair_bruteforce

@@ -4,11 +4,13 @@ from __future__ import annotations
 from typing import Any
 
 from faust.skills.fakes import (
-    fake_bssid, fake_channel, fake_rssi, fake_ssid, ago_iso, mark_synthetic, _rng,
+    fake_bssid, fake_channel, fake_rssi, fake_ssid, ago_iso,
+    mark_synthetic, pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     interface = args.get("interface", "wlan1mon")
     whitelist = args.get("whitelist") or []
     duration_s = int(args.get("duration_s", 60)) or 60
@@ -46,7 +48,7 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         for i in range(rng.randint(2, 4))
     ]
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "interface": interface,
         "monitoring_duration_s": duration_s,
         "networks_seen": networks_seen,
@@ -54,3 +56,12 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         "unknown_aps": unknown_aps,
         "whitelist_matches": len(whitelist_ssids),
     })
+
+    summary = pack_summary({
+        "evil_twins": len(evil_twins),
+        "unknown_aps": len(unknown_aps),
+        "networks_seen": networks_seen,
+        "victim_ssid": evil_twins[0]["ssid"] if evil_twins else None,
+        "rogue_bssid": evil_twins[0]["rogue_bssid"] if evil_twins else None,
+    })
+    return ToolResult(result=result, summary=summary)

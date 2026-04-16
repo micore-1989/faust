@@ -24,6 +24,7 @@ parameters_schema:
   required:
     - interface
     - mappings
+typical_duration_s: 60
 sensitivity: disruptive
 allowed_tools:
   - dns_hijack

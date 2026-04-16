@@ -1,9 +1,8 @@
 ---
 name: deauth_detector
 description: >
-  Passive monitoring for 802.11 deauthentication frames in the local RF
-  environment. Useful for detecting active attacks, rogue devices, or
-  verifying that your own deauth skill worked. Passive — listens only.
+  Defense: passively monitor 802.11 deauth/disassoc frames to detect an
+  active jamming or evil-twin attack against nearby APs.
 parameters_schema:
   type: object
   properties:
@@ -24,9 +23,13 @@ parameters_schema:
         legitimate disassocs are much rarer).
   required:
     - interface
+typical_duration_s: 60
 sensitivity: passive
 allowed_tools:
   - deauth_detector
+pivot_hints:
+  - when: "summary.under_attack == true"
+    suggest: "Active deauth attack in progress from summary.attacker_mac against summary.target_bssid. Operator options: alert only, wifi_scan to locate the attacker's AP, or rogue_ap_detector to correlate with evil-twin activity."
 ---
 
 # Deauth Detector

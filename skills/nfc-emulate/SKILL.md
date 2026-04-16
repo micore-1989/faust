@@ -37,6 +37,7 @@ parameters_schema:
         Default 60.
   required:
     - action
+typical_duration_s: 30
 sensitivity: active
 allowed_tools:
   - nfc_emulate

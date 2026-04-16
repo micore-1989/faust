@@ -1,9 +1,8 @@
 ---
 name: responder_poison
 description: >
-  Run Responder to poison LLMNR, NBT-NS, and mDNS name-resolution queries,
-  capturing NTLM hashes from any Windows/macOS clients that misresolve hostnames.
-  DISRUPTIVE — actively answers broadcast queries on the local subnet.
+  Poison LLMNR/NBT-NS/mDNS queries and capture NTLM hashes from clients
+  that misresolve hostnames on the local subnet.
 parameters_schema:
   type: object
   properties:
@@ -24,6 +23,7 @@ parameters_schema:
       description: If true, listen but do not answer (recon only). Default false.
   required:
     - interface
+typical_duration_s: 120
 sensitivity: disruptive
 allowed_tools:
   - responder_poison

@@ -42,6 +42,7 @@ parameters_schema:
   required:
     - action
     - frequency_mhz
+typical_duration_s: 10
 sensitivity: active
 allowed_tools:
   - subghz_replay

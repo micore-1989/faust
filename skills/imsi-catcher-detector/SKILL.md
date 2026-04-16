@@ -17,6 +17,7 @@ parameters_schema:
       type: string
       description: Path to a JSON baseline of known cells. If absent, builds one on first run.
   required: []
+typical_duration_s: 120
 sensitivity: passive
 allowed_tools:
   - imsi_catcher_detector

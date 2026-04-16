@@ -21,9 +21,15 @@ parameters_schema:
       items: {type: string}
       description: Protocol filter (e.g. ["keeloq", "acurite"]). Omit for all known.
   required: []
+typical_duration_s: 15
 sensitivity: passive
 allowed_tools:
   - subghz_decode
+pivot_hints:
+  - when: "summary.has_rolling_code == true"
+    suggest: "Rolling-code protocol detected — plain subghz_replay will NOT work. Rolljam/rollback attacks require capture of an unused code during intended operation; flag this to the operator."
+  - when: "summary.decoded_count >= 1"
+    suggest: "Signals decoded — subghz_replay (action=analyze) can confirm the modulation/bitrate, and subghz_replay (action=replay) can retransmit the capture if the protocol is fixed-code."
 ---
 
 # Sub-GHz Decode

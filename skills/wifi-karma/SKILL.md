@@ -18,6 +18,7 @@ parameters_schema:
       description: Only respond to open-network probes (never WPA). Safer. Default true.
   required:
     - interface
+typical_duration_s: 60
 sensitivity: disruptive
 allowed_tools:
   - wifi_karma

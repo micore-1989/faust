@@ -54,6 +54,15 @@ class SkillFrontmatter(BaseModel):
     }
     sensitivity: Sensitivity = "passive"
     allowed_tools: list[str] = []
+    # Wall-clock seconds a typical run takes. Used by the planner to budget
+    # sequences and by the UI to show an estimate on PlanProposed. None = unknown.
+    typical_duration_s: int | None = None
+    # Domain-opinion hints the skill writer bakes in. Each entry is
+    # {"when": "<dsl>", "suggest": "<hint text for the planner>"}.
+    # See faust/agent/pivots.py for the DSL. After the skill runs, matching
+    # suggestions are injected into the next step's Pass 2 context so the
+    # planner can pivot without paying a full re-plan call.
+    pivot_hints: list[dict[str, str]] = []
 
     @field_validator("name")
     @classmethod
@@ -142,6 +151,8 @@ def load_skill(skill_dir: Path) -> Tool:
         parameters_schema=frontmatter.parameters_schema,
         fn=fn,
         sensitivity=frontmatter.sensitivity,
+        typical_duration_s=frontmatter.typical_duration_s,
+        pivot_hints=frontmatter.pivot_hints,
     )
 
 

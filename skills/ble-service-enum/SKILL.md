@@ -18,6 +18,7 @@ parameters_schema:
       description: Connection timeout. Default 15.
   required:
     - mac
+typical_duration_s: 10
 sensitivity: active
 allowed_tools:
   - ble_service_enum

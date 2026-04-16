@@ -22,9 +22,15 @@ parameters_schema:
   required:
     - start_mhz
     - end_mhz
+typical_duration_s: 30
 sensitivity: passive
 allowed_tools:
   - rf_spectrum_scan
+pivot_hints:
+  - when: "summary.subghz_peaks >= 1"
+    suggest: "Sub-GHz activity present — subghz_decode against the strongest sub-GHz peak frequency (summary.strongest.freq_mhz) may identify the device protocol."
+  - when: "summary.peaks_count == 0"
+    suggest: "No significant RF peaks in this range. Widen start_mhz/end_mhz, or try spectrum_anomaly against a stored baseline to catch deliberate low-power emitters."
 ---
 
 # RF Spectrum Scan

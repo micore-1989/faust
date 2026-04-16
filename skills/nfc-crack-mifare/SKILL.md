@@ -21,6 +21,7 @@ parameters_schema:
       type: integer
       description: Sector to recover key for. -1 = all sectors. Default -1.
   required: []
+typical_duration_s: 60
 sensitivity: active
 allowed_tools:
   - nfc_crack_mifare

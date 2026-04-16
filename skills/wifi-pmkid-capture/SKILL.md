@@ -1,31 +1,37 @@
 ---
 name: wifi_pmkid_capture
 description: >
-  Capture a PMKID from an access point's first EAPOL frame. No handshake
-  required — only needs the AP to respond. Faster and more reliable than
-  handshake capture. Output is hashcat-compatible for offline cracking.
+  Capture a PMKID from an AP's first EAPOL frame for offline cracking.
+  No client needed — faster than handshake capture.
 parameters_schema:
   type: object
   properties:
     interface:
       type: string
-      description: Monitor-mode WiFi interface (e.g. wlan1mon)
+      description: Monitor-mode WiFi interface.
+      default: wlan1mon
     bssid:
       type: string
-      description: Target access point BSSID
+      description: Target access point BSSID. Pre-fill from best_handshake_target of a prior wifi_scan summary when available.
     channel:
       type: integer
-      description: Channel of the target AP
+      description: Channel of the target AP. Pre-fill from top_3[].channel in the matching wifi_scan entry.
+      default: 6
     timeout_s:
       type: integer
-      description: How long to probe before giving up. Default 30.
+      description: How long to probe before giving up.
+      default: 30
   required:
-    - interface
     - bssid
-    - channel
+typical_duration_s: 60
 sensitivity: active
 allowed_tools:
   - wifi_pmkid_capture
+pivot_hints:
+  - when: "summary.captured == true"
+    suggest: "PMKID captured to summary.hash_file — wpa_crack can now attempt offline recovery of the PSK."
+  - when: "summary.captured == false"
+    suggest: "AP did not leak PMKID (likely WPA3 or hardened firmware). Fall back to wifi_handshake_capture, which also works against WPA2."
 ---
 
 # WiFi PMKID Capture

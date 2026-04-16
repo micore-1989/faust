@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import fake_bssid, fake_hash, mark_synthetic, _rng
+from faust.skills.fakes import fake_bssid, fake_hash, mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     pcap_path = args.get("pcap_path", "captures/unknown.pcap")
     extract = args.get("extract") or ["creds", "dns", "http", "handshakes"]
     max_items = int(args.get("max_items_per_category", 50))
@@ -58,4 +59,18 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             for i in range(n)
         ]
 
-    return mark_synthetic(result)
+    result = mark_synthetic(result)
+
+    # Opinion fields — what should the planner pivot on?
+    handshakes = result.get("wpa_handshakes", [])
+    creds = result.get("credentials", [])
+    summary = pack_summary({
+        "packet_count": result["packet_count"],
+        "handshakes_count": len(handshakes),
+        "has_crackable_hash": bool(handshakes),
+        "first_hash_file": handshakes[0]["hash_file"] if handshakes else None,
+        "creds_count": len(creds),
+        "dns_queries_count": len(result.get("dns_queries", [])),
+        "http_requests_count": len(result.get("http_requests", [])),
+    })
+    return ToolResult(result=result, summary=summary)

@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import now_iso, mark_synthetic, _rng
+from faust.skills.fakes import now_iso, mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     baseline_file = args.get("baseline_file")
     start_mhz = float(args.get("start_mhz", 300))
     end_mhz = float(args.get("end_mhz", 2500))
@@ -38,10 +39,20 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "first_seen": now_iso(),
         })
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "baseline_age_days": baseline_age_days,
         "scan_range_mhz": [start_mhz, end_mhz],
         "threshold_db": threshold_db,
         "duration_s": duration_s,
         "anomalies": anomalies,
     })
+
+    max_delta = max((a["delta_db"] for a in anomalies), default=0)
+    first = anomalies[0] if anomalies else None
+    summary = pack_summary({
+        "anomalies_detected": len(anomalies),
+        "max_delta_db": max_delta,
+        "first_freq_mhz": first["freq_mhz"] if first else None,
+        "interpretation": first["interpretation"] if first else None,
+    })
+    return ToolResult(result=result, summary=summary)

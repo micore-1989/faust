@@ -21,6 +21,7 @@ parameters_schema:
       description: Recursively scan found directories. Default false.
   required:
     - target_url
+typical_duration_s: 180
 sensitivity: active
 allowed_tools:
   - http_recon

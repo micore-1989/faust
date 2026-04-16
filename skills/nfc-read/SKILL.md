@@ -25,9 +25,17 @@ parameters_schema:
         authentication (e.g. ["FFFFFFFFFFFF", "A0A1A2A3A4A5"]). Default
         keys (FFx6, 000000000000, and common vendor defaults) are always tried.
   required: []
+typical_duration_s: 5
 sensitivity: passive
 allowed_tools:
   - nfc_read
+pivot_hints:
+  - when: "summary.is_mifare_classic == true"
+    suggest: "MIFARE Classic detected — if sectors did not read with default keys, nfc_crack_mifare (darkside/hardnested) recovers unknown keys. After cracking, re-run nfc_read with those keys to dump sectors."
+  - when: "summary.has_ndef == true"
+    suggest: "NDEF records present — contents may include URIs or Wi-Fi credentials. Review the full result and consider nfc_write to edit or clone."
+  - when: "summary.readable_sectors >= 1"
+    suggest: "Sectors already readable — rfid_clone (for 125 kHz) or nfc_write (for 13.56 MHz) can clone this tag onto a blank."
 ---
 
 # NFC Read

@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import fake_hash, fake_tag_type, fake_uid, mark_synthetic, _rng
+from faust.skills.fakes import (
+    fake_hash, fake_tag_type, fake_uid, mark_synthetic, pack_summary, _rng,
+)
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     timeout_s = int(args.get("timeout_s", 10))
     read_sectors = args.get("read_sectors", False)
     keys = args.get("keys") or []
@@ -49,4 +52,15 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
                 for i in range(rng.randint(2, 8))
             ]
 
-    return mark_synthetic(result)
+    result = mark_synthetic(result)
+
+    is_classic = "Classic" in tag_type
+    sectors = result.get("sectors") or []
+    summary = pack_summary({
+        "uid": uid,
+        "tag_type": tag_type,
+        "is_mifare_classic": is_classic,
+        "readable_sectors": len(sectors),
+        "has_ndef": bool(result.get("ndef")),
+    })
+    return ToolResult(result=result, summary=summary)

@@ -5,11 +5,12 @@ from typing import Any
 
 from faust.skills.fakes import (
     fake_bssid, fake_capture_path, fake_client_mac, fake_ssid,
-    ago_iso, now_iso, mark_synthetic, _rng,
+    ago_iso, now_iso, mark_synthetic, pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     interface = args.get("interface", "wlan1mon")
     duration_s = int(args.get("duration_s", 60)) or 60
     threshold = int(args.get("threshold", 5))
@@ -34,7 +35,7 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         })
         deauth_count = rng.randint(50, 500)
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "interface": interface,
         "monitoring_duration_s": duration_s,
         "deauth_frames_seen": deauth_count,
@@ -43,3 +44,12 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         "threshold": threshold,
         "pcap_path": fake_capture_path("deauth_monitor"),
     })
+
+    summary = pack_summary({
+        "under_attack": under_attack,
+        "alerts": len(alerts),
+        "deauth_frames": deauth_count,
+        "attacker_mac": alerts[0]["source_mac"] if alerts else None,
+        "target_bssid": alerts[0]["target_bssid"] if alerts else None,
+    })
+    return ToolResult(result=result, summary=summary)

@@ -9,20 +9,22 @@ parameters_schema:
   properties:
     bssid:
       type: string
-      description: Target access point BSSID (MAC address)
+      description: Target access point BSSID (MAC address). Pre-fill from the best_handshake_target or top_3 bssid of a prior wifi_scan summary when available.
     client:
       type: string
-      description: Target client MAC, or "ff:ff:ff:ff:ff:ff" for broadcast
+      description: Target client MAC, or broadcast to deauth all associated clients.
+      default: "ff:ff:ff:ff:ff:ff"
     interface:
       type: string
-      description: Monitor-mode WiFi interface (e.g. wlan0mon)
+      description: Monitor-mode WiFi interface.
+      default: wlan1mon
     count:
       type: integer
-      description: Number of deauth frames to send (default 5)
+      description: Number of deauth frames to send.
+      default: 5
   required:
     - bssid
-    - client
-    - interface
+typical_duration_s: 10
 sensitivity: disruptive
 allowed_tools:
   - wifi_deauth

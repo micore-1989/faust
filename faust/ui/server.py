@@ -72,6 +72,12 @@ class UIServer:
         self._dispatch_handler: DispatchHandler | None = None
         self._state_handler: StateHandler | None = None
         self._boot_task: asyncio.Task | None = None
+        # Long-running handlers (prompt, dispatch) must not block the WS
+        # receive loop — otherwise plan_approval / confirmation messages
+        # can never arrive and the agent deadlocks on its own approval
+        # gate. We track fire-and-forget tasks here so we can log their
+        # exceptions and cancel them on shutdown.
+        self._background_tasks: set[asyncio.Task] = set()
 
         # Routes.
         self._app.router.add_get("/ws", self._ws_handler)
@@ -92,6 +98,8 @@ class UIServer:
     async def stop(self) -> None:
         if self._boot_task is not None:
             self._boot_task.cancel()
+        for task in list(self._background_tasks):
+            task.cancel()
         if self._runner is not None:
             await self._runner.cleanup()
 
@@ -216,13 +224,44 @@ class UIServer:
                 except json.JSONDecodeError:
                     continue
 
-                await self._handle_incoming(payload)
+                # prompt + dispatch may block on approval/confirmation gates
+                # that are themselves serviced by this same receive loop —
+                # dispatch them as background tasks to avoid deadlock. Fast
+                # message types (power, mephisto, confirmation, plan_approval)
+                # keep inline ordering.
+                if payload.get("type") in ("prompt", "dispatch"):
+                    self._spawn_background(self._handle_incoming(payload))
+                else:
+                    await self._handle_incoming(payload)
         finally:
             if send_task is not None:
                 send_task.cancel()
             self.bridge.unsubscribe(q)
 
         return ws
+
+    def _spawn_background(self, coro) -> asyncio.Task:
+        """Run a handler concurrently with the WS receive loop.
+
+        Tracks the task so stop() can cancel it, and logs any unhandled
+        exception so fire-and-forget doesn't swallow errors silently.
+        """
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._background_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                # Surface to stdout — ui/run.py foregrounds the server.
+                import traceback
+                print(f"  [ws-bg] handler crashed: {type(exc).__name__}: {exc}")
+                traceback.print_exception(type(exc), exc, exc.__traceback__)
+
+        task.add_done_callback(_done)
+        return task
 
     async def _handle_incoming(self, payload: dict[str, Any]) -> None:
         mtype = payload.get("type")

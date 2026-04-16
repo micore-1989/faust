@@ -37,6 +37,7 @@ parameters_schema:
         Default "2d".
   required:
     - interface
+typical_duration_s: 60
 sensitivity: passive
 allowed_tools:
   - wardrive

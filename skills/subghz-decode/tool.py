@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import now_iso, mark_synthetic, _rng
+from faust.skills.fakes import now_iso, mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     frequency_mhz = float(args.get("frequency_mhz", 433.92))
     duration_s = int(args.get("duration_s", 10))
     protocols = args.get("protocols") or []
@@ -42,9 +43,20 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
     if protocols:
         decoded = [d for d in decoded if d["protocol"] in protocols]
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "frequency_mhz": frequency_mhz,
         "decoded": decoded,
         "unknown_signals": rng.randint(0, 5),
         "duration_s": duration_s,
     })
+
+    protos = sorted({d["protocol"] for d in decoded})
+    has_rolling = any(d.get("is_rolling") for d in decoded)
+    summary = pack_summary({
+        "decoded_count": len(decoded),
+        "protocols": protos,
+        "has_rolling_code": has_rolling,
+        "unknown_signals": result["unknown_signals"],
+        "first_device": decoded[0]["protocol"] if decoded else None,
+    })
+    return ToolResult(result=result, summary=summary)

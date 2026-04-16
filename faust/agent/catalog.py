@@ -71,6 +71,7 @@ class CatalogEntry:
     description: str
     category: str
     sensitivity: Sensitivity
+    typical_duration_s: int | None = None
 
 
 def build_catalog(
@@ -91,6 +92,7 @@ def build_catalog(
             description=tool.description,
             category=_categorize(tool.name),
             sensitivity=tool.sensitivity,
+            typical_duration_s=tool.typical_duration_s,
         ))
     # Sort by category then name for consistent presentation.
     entries.sort(key=lambda e: (e.category, e.name))
@@ -131,6 +133,7 @@ def render_catalog(entries: list[CatalogEntry]) -> str:
             desc = desc[:period + 1]
         elif len(desc) > 120:
             desc = desc[:117] + "..."
-        lines.append(f"- {e.name} [{e.sensitivity}]: {desc}")
+        duration = f" ~{e.typical_duration_s}s" if e.typical_duration_s else ""
+        lines.append(f"- {e.name} [{e.sensitivity}{duration}]: {desc}")
 
     return "\n".join(lines)

@@ -21,9 +21,15 @@ parameters_schema:
       description: Cap results per category. Default 50.
   required:
     - pcap_path
+typical_duration_s: 20
 sensitivity: passive
 allowed_tools:
   - pcap_inspect
+pivot_hints:
+  - when: "summary.has_crackable_hash == true"
+    suggest: "Extracted WPA handshake available at summary.first_hash_file — wpa_crack can attempt to recover the PSK offline."
+  - when: "summary.creds_count >= 1"
+    suggest: "Cleartext credentials surfaced. These belong in the final report; no further tool call needed."
 ---
 
 # PCAP Inspect

@@ -211,3 +211,35 @@ def mark_synthetic(result: dict[str, Any]) -> dict[str, Any]:
     """
     result["_synthetic"] = True
     return result
+
+
+# ── Summary channel ─────────────────────────────────────────────
+
+def _approx_json_len(d: dict[str, Any]) -> int:
+    import json as _json
+    return len(_json.dumps(d, default=str))
+
+
+def pack_summary(fields: dict[str, Any], max_chars: int = 200) -> dict[str, Any]:
+    """Return a compact summary dict, trimming lowest-priority fields first.
+
+    Skills use this to hand the agent loop a structured ≤max_chars digest of
+    what was learned (alongside the full result). Fields are declared in
+    priority order — when the encoded length exceeds max_chars, fields from
+    the tail drop until it fits. Guarantees the summary is small and valid
+    JSON for the Pass 2 / re-plan feedforward paths.
+
+    Example:
+        summary = pack_summary({
+            "networks_found": 8,
+            "best_handshake_target": "aa:bb:cc:dd:ee:ff",
+            "karma_candidates": 0,
+            "top_3": [...],       # dropped first if we overflow
+        })
+    """
+    packed = dict(fields)
+    keys = list(packed.keys())
+    # Drop from the tail until under budget.
+    while keys and _approx_json_len(packed) > max_chars:
+        packed.pop(keys.pop())
+    return packed

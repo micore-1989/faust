@@ -17,6 +17,7 @@ parameters_schema:
       description: Seconds to wait for replies. Default 5.
   required:
     - interface
+typical_duration_s: 15
 sensitivity: passive
 allowed_tools:
   - arp_scan

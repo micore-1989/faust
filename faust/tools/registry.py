@@ -19,12 +19,32 @@ ToolCallable = Callable[[dict[str, Any]], Awaitable[Any] | Any]
 
 
 @dataclass
+class ToolResult:
+    """Optional explicit return type for tool.py execute() callables.
+
+    `result` holds the full payload (what the UI shows). `summary` is a
+    compact dict (≤200 chars serialized) that the agent loop uses when
+    feeding this step's outcome into later Pass 2 / re-plan prompts.
+
+    Skills that don't care about summaries can just return a dict as before.
+    The dispatcher treats a bare dict as `ToolResult(result=dict, summary=None)`.
+    """
+    result: Any
+    summary: dict[str, Any] | None = None
+
+
+@dataclass
 class Tool:
     name: str
     description: str
     parameters_schema: dict[str, Any]  # JSON Schema
     fn: ToolCallable
     sensitivity: Sensitivity = "passive"
+    # Wall-clock seconds a typical run takes. Populated from SKILL.md.
+    # None = unknown; planner will not include a duration badge for this skill.
+    typical_duration_s: int | None = None
+    # Post-execution hint list. See faust/agent/pivots.py.
+    pivot_hints: list[dict[str, str]] = field(default_factory=list)
 
     def to_openai_schema(self) -> dict[str, Any]:
         """Format this tool for the OpenAI /v1/chat/completions tools field."""

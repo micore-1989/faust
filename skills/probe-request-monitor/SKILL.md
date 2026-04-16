@@ -17,6 +17,7 @@ parameters_schema:
       description: Correlate randomized MACs across time windows to track real devices. Default true.
   required:
     - interface
+typical_duration_s: 300
 sensitivity: passive
 allowed_tools:
   - probe_request_monitor

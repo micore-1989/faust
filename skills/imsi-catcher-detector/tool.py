@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import mark_synthetic, _rng
+from faust.skills.fakes import mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     bands = args.get("bands") or ["GSM-850", "GSM-1900", "LTE-B2", "LTE-B4"]
     duration_s = int(args.get("duration_s", 120))
     known_towers_file = args.get("known_towers_file")
@@ -34,10 +35,19 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "confidence": sr.choice(["low", "medium", "high"]),
         })
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "bands": bands,
         "duration_s": duration_s,
         "towers_seen": towers_seen,
         "suspicious": suspicious,
         "baseline_matches": towers_seen - len(suspicious),
     })
+
+    first = suspicious[0] if suspicious else None
+    summary = pack_summary({
+        "towers_seen": towers_seen,
+        "suspicious": len(suspicious),
+        "confidence": first["confidence"] if first else None,
+        "reason": first["reason"] if first else None,
+    })
+    return ToolResult(result=result, summary=summary)

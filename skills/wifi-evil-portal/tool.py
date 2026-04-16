@@ -5,14 +5,15 @@ from typing import Any
 
 from faust.skills.fakes import (
     fake_capture_path, fake_client_mac, fake_hash, now_iso, ago_iso,
-    mark_synthetic, _rng,
+    mark_synthetic, pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
 _FAKE_USERS = ["alice", "bob", "charlie", "diane", "evan"]
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     ssid = args.get("ssid", "TargetNet-Guest")
     template = args.get("template", "google")
     channel = int(args.get("channel", 6))
@@ -35,7 +36,8 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "password_hash": f"sha256:{fake_hash(16, seed)}",
         })
 
-    return mark_synthetic({
+    log_file = fake_capture_path("evil_portal", "log")
+    result = mark_synthetic({
         "ap_bssid": "02:11:22:33:44:55",
         "ssid": ssid,
         "channel": channel,
@@ -43,5 +45,14 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         "duration_s": duration_s,
         "clients_connected": n_clients,
         "credentials_captured": creds,
-        "log_file": fake_capture_path("evil_portal", "log"),
+        "log_file": log_file,
     })
+
+    summary = pack_summary({
+        "clients_connected": n_clients,
+        "credentials_captured": len(creds),
+        "ssid": ssid,
+        "template": template,
+        "log_file": log_file,
+    })
+    return ToolResult(result=result, summary=summary)

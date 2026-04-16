@@ -22,6 +22,7 @@ parameters_schema:
       type: integer
       description: Detection threshold 0-255. Lower = more sensitive. Default 40.
   required: []
+typical_duration_s: 30
 sensitivity: passive
 allowed_tools:
   - camera_ir_scan

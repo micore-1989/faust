@@ -21,6 +21,7 @@ parameters_schema:
       description: Max runtime. Stops gracefully and reports progress. Default 300.
   required:
     - hash_file
+typical_duration_s: 300
 sensitivity: active
 allowed_tools:
   - wpa_crack

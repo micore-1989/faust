@@ -24,6 +24,7 @@ parameters_schema:
       description: Milliseconds between adverts. Default 20 (50 Hz). Minimum 10.
   required:
     - mode
+typical_duration_s: 30
 sensitivity: disruptive
 allowed_tools:
   - ble_spam

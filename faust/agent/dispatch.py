@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable
 
 from .events import ToolCallExecuted
-from ..tools.registry import ToolRegistry, Sensitivity
+from ..tools.registry import ToolRegistry, Sensitivity, ToolResult
 
 # Approver callback. Returning False means the user rejected the call.
 # May be sync or async; dispatcher will await if needed.
@@ -41,6 +41,10 @@ class DispatchResult:
     result: Any = None
     error: str | None = None
     duration_ms: int = 0
+    # Compact structured summary of the result for agent feedforward.
+    # Set when the skill returns a ToolResult(result=..., summary=...);
+    # None for legacy skills that return a bare dict.
+    summary: dict[str, Any] | None = None
 
 
 class Dispatcher:
@@ -78,11 +82,18 @@ class Dispatcher:
 
         start = time.monotonic()
         try:
-            result = await self.registry.invoke(tool_name, arguments)
+            raw = await self.registry.invoke(tool_name, arguments)
             duration_ms = int((time.monotonic() - start) * 1000)
+            # Skills can opt into the summary channel by returning a
+            # ToolResult. Bare returns (dict, str, etc.) stay untouched.
+            if isinstance(raw, ToolResult):
+                result, summary = raw.result, raw.summary
+            else:
+                result, summary = raw, None
             return DispatchResult(
                 executed=True,
                 result=result,
+                summary=summary,
                 duration_ms=duration_ms,
             )
         except Exception as e:

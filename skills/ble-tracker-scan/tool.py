@@ -4,14 +4,15 @@ from __future__ import annotations
 from typing import Any
 
 from faust.skills.fakes import (
-    fake_mac, ago_iso, now_iso, mark_synthetic, _rng,
+    fake_mac, ago_iso, now_iso, mark_synthetic, pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
 _TRACKER_TYPES = ["airtag", "tile", "chipolo", "smarttag"]
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     duration_s = int(args.get("duration_s", 300))
     min_sightings = int(args.get("min_sightings", 3))
     known_devices = set(args.get("known_devices") or [])
@@ -38,8 +39,17 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
                 "estimated_distance_m": round(rng.uniform(0.5, 5.0), 1),
             })
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "scan_duration_s": duration_s,
         "devices_seen": devices_seen,
         "suspected_trackers": suspected,
     })
+
+    first = suspected[0] if suspected else None
+    summary = pack_summary({
+        "devices_seen": devices_seen,
+        "suspected_trackers": len(suspected),
+        "moving_with_operator": first["moving_with_operator"] if first else None,
+        "type": first["type"] if first else None,
+    })
+    return ToolResult(result=result, summary=summary)

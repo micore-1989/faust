@@ -20,6 +20,7 @@ import httpx
 from faust.agent.events import Final, Thinking, ToolCallExecuted, ToolCallProposed
 from faust.ui.bridge import EventBridge
 from faust.ui.server import UIServer
+from faust.ui.state import Mephisto, Power
 
 
 PORT = 8091
@@ -127,12 +128,74 @@ async def test_bridge_push_raw():
     print("✓ bridge push_raw works")
 
 
+async def test_prompt_handler_does_not_deadlock_on_approval():
+    """Regression: the WS receive loop must stay free while a prompt
+    handler is awaiting plan_approval. Otherwise the approval message
+    can never arrive and the agent blocks forever.
+
+    Reproduces the Apr-2026 bug where _handle_incoming was awaited inline
+    in the receive loop; prompt → wait_for_plan_approval → deadlock.
+    """
+    import json as _json
+
+    bridge = EventBridge()
+    server = UIServer(bridge, port=PORT + 1)
+
+    handler_finished = asyncio.Event()
+    got_approved: dict[str, Any] = {}
+
+    async def prompt_handler(text: str) -> None:
+        # Simulate what TwoPassAgent does: block on plan approval.
+        resp = await server.wait_for_plan_approval()
+        got_approved["value"] = bool(resp.get("approved"))
+        handler_finished.set()
+
+    server.set_handlers(prompt_handler=prompt_handler)
+    # Skip the canned boot sequence — force booted state directly so the
+    # server accepts prompts immediately.
+    server.state.power = Power.ON
+    server.state.mephisto = Mephisto.CONNECTED
+
+    await server.start()
+
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.ws_connect(f"http://localhost:{PORT + 1}/ws") as ws:
+                # Drain the initial state push so it doesn't clog the test.
+                await asyncio.wait_for(ws.receive(), timeout=1.0)
+
+                # Fire the prompt — handler will block on plan_approval.
+                await ws.send_str(_json.dumps({"type": "prompt", "text": "hi"}))
+                await asyncio.sleep(0.05)  # let the receive loop dispatch it
+
+                # Now send the approval. With the bug, this message never
+                # reaches _handle_incoming because the receive loop was
+                # blocked awaiting the prompt handler. With the fix, the
+                # prompt handler runs as a background task and the receive
+                # loop stays free to process this message.
+                await ws.send_str(_json.dumps({
+                    "type": "plan_approval",
+                    "plan_id": "x",
+                    "approved": True,
+                }))
+
+                # Handler should complete within a reasonable window.
+                await asyncio.wait_for(handler_finished.wait(), timeout=3.0)
+                assert got_approved.get("value") is True
+    finally:
+        await server.stop()
+
+    print("✓ prompt handler does not deadlock when awaiting plan_approval")
+
+
 async def main():
     await test_static_files_served()
     await test_bridge_serializes_events()
     await test_bridge_fan_out()
     await test_bridge_unsubscribe()
     await test_bridge_push_raw()
+    await test_prompt_handler_does_not_deadlock_on_approval()
     print("\nall UI tests passed")
 
 

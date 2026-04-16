@@ -1,9 +1,8 @@
 ---
 name: ble_tracker_scan
 description: >
-  Scan for BLE tracking devices (AirTags, Tile, Chipolo, Samsung SmartTag)
-  that may be following the operator. Detects trackers not paired with
-  the operator's own devices. Privacy / counter-surveillance tool. Passive.
+  Counter-surveillance: detect AirTags, Tile, Chipolo, and SmartTag beacons
+  following the operator that aren't paired to a known device.
 parameters_schema:
   type: object
   properties:
@@ -26,6 +25,7 @@ parameters_schema:
         MAC addresses of known-friendly trackers (your own AirTags, your
         partner's Tile, etc.). Excluded from alerts.
   required: []
+typical_duration_s: 300
 sensitivity: passive
 allowed_tools:
   - ble_tracker_scan

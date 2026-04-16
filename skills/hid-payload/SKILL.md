@@ -1,10 +1,8 @@
 ---
 name: hid_payload
 description: >
-  Execute a BadUSB-style keyboard payload against a target computer
-  connected via Faust's USB-A port. Pi 5 enumerates as a USB HID keyboard
-  and types the payload at high speed. DISRUPTIVE — bypasses screen locks,
-  executes arbitrary commands as the logged-in user.
+  BadUSB keystroke injection over USB HID. Faust enumerates as a keyboard
+  and types a Ducky Script payload against the logged-in user.
 parameters_schema:
   type: object
   properties:
@@ -31,6 +29,7 @@ parameters_schema:
         Words per minute. Faster is less suspicious but more error-prone
         on slow targets. Default 400 (fast, ~50 chars/sec).
   required: []
+typical_duration_s: 10
 sensitivity: disruptive
 allowed_tools:
   - hid_payload

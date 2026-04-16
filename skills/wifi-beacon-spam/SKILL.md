@@ -24,6 +24,7 @@ parameters_schema:
       description: How long. Default 30.
   required:
     - interface
+typical_duration_s: 60
 sensitivity: disruptive
 allowed_tools:
   - wifi_beacon_spam

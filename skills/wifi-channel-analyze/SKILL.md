@@ -18,6 +18,7 @@ parameters_schema:
       description: Time per channel, seconds. Default 3.
   required:
     - interface
+typical_duration_s: 10
 sensitivity: passive
 allowed_tools:
   - wifi_channel_analyze

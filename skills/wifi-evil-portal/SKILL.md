@@ -1,10 +1,8 @@
 ---
 name: wifi_evil_portal
 description: >
-  Host a rogue access point with a captive portal that mimics a target SSID.
-  Clients that connect are presented with a fake login page to harvest
-  credentials. DISRUPTIVE — broadcasts an AP and potentially intercepts
-  traffic from unwitting clients.
+  Host a rogue AP broadcasting a target SSID with a captive-portal login
+  page that harvests credentials from connecting clients.
 parameters_schema:
   type: object
   properties:
@@ -31,6 +29,7 @@ parameters_schema:
   required:
     - ssid
     - template
+typical_duration_s: 300
 sensitivity: disruptive
 allowed_tools:
   - wifi_evil_portal

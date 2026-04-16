@@ -23,9 +23,15 @@ parameters_schema:
         Minimum RSSI in dBm. Devices weaker than this are excluded.
         Useful for proximity filtering (e.g. -60 = roughly within 5m).
   required: []
+typical_duration_s: 20
 sensitivity: passive
 allowed_tools:
   - ble_scan
+pivot_hints:
+  - when: "summary.connectable >= 1"
+    suggest: "Connectable devices present — ble_service_enum can list their GATT services and identify writable characteristics."
+  - when: "summary.devices_found == 0"
+    suggest: "No BLE devices in range. The environment may be RF-quiet or the radio may not be in scanning mode. Consider rf_spectrum_scan around 2.4 GHz to confirm."
 ---
 
 # BLE Scan

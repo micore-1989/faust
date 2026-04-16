@@ -21,9 +21,15 @@ parameters_schema:
       description: Timing template 0-5. Higher is faster, more detectable. Default 3.
   required:
     - target
+typical_duration_s: 30
 sensitivity: active
 allowed_tools:
   - nmap_scan
+pivot_hints:
+  - when: "summary.legacy_or_admin_services >= 1"
+    suggest: "Legacy/admin services (telnet, FTP, SMB, RDP, MySQL, Postgres, Tomcat) present — summary.first_interesting points to one. Credential-stuffing, default-cred testing, or protocol-specific skills apply."
+  - when: "summary.hosts_up == 0"
+    suggest: "No hosts responded. Network may be down, firewalled, or the interface may be on the wrong segment. Consider arp_scan for layer-2 reachability."
 ---
 
 # Nmap Scan

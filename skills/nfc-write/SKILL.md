@@ -33,6 +33,7 @@ parameters_schema:
       description: For mifare_sector - authentication key if not default
   required:
     - mode
+typical_duration_s: 5
 sensitivity: active
 allowed_tools:
   - nfc_write

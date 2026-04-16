@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import mark_synthetic, _rng
+from faust.skills.fakes import mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
 _COMMON_SERVICES = {
@@ -21,8 +22,11 @@ _COMMON_SERVICES = {
     53:   ("dns", "BIND 9.18"),
 }
 
+# Ports the planner should likely act on — legacy/cleartext or admin-reachable.
+_INTERESTING_PORTS = {21, 23, 445, 3306, 3389, 5432, 8080}
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+
+def execute(args: dict[str, Any]) -> ToolResult:
     target = args.get("target", "192.168.1.0/24")
     ports = args.get("ports", "top1000")
     scan_type = args.get("scan_type", "syn")
@@ -54,10 +58,24 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "open_ports": open_ports,
         })
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "target": target,
         "scan_type": scan_type,
         "timing": timing,
         "hosts": hosts,
         "scan_duration_s": round(rng.uniform(3.0, 25.0), 1),
     })
+
+    all_ports = [(h["ip"], p["port"], p["service"]) for h in hosts for p in h["open_ports"]]
+    legacy = [(ip, port, svc) for (ip, port, svc) in all_ports if port in _INTERESTING_PORTS]
+    first_legacy = (
+        {"ip": legacy[0][0], "port": legacy[0][1], "service": legacy[0][2]}
+        if legacy else None
+    )
+    summary = pack_summary({
+        "hosts_up": len(hosts),
+        "total_open_ports": len(all_ports),
+        "legacy_or_admin_services": len(legacy),
+        "first_interesting": first_legacy,
+    })
+    return ToolResult(result=result, summary=summary)

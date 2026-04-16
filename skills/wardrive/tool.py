@@ -5,11 +5,13 @@ from typing import Any
 
 from faust.skills.fakes import (
     fake_bssid, fake_capture_path, fake_channel, fake_encryption,
-    fake_gps, fake_rssi, fake_ssid, now_iso, ago_iso, mark_synthetic, _rng,
+    fake_gps, fake_rssi, fake_ssid, now_iso, ago_iso, mark_synthetic,
+    pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     interface = args.get("interface", "wlan1mon")
     duration_s = int(args.get("duration_s", 60))
     include_ble = args.get("include_ble", True)
@@ -51,7 +53,7 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
 
     out = fake_capture_path("wardrive", "json" if output_format == "json" else "csv")
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "survey": {
             "start_time": ago_iso(duration_s),
             "duration_s": duration_s,
@@ -62,3 +64,14 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         "ble_devices": ble_devices,
         "output_file": out,
     })
+
+    open_nets = [n for n in networks if n["encryption"] == "Open"]
+    summary = pack_summary({
+        "wifi_mapped": len(networks),
+        "ble_mapped": len(ble_devices),
+        "open_networks": len(open_nets),
+        "gps_fix": "3d",
+        "duration_s": duration_s,
+        "output_file": out,
+    })
+    return ToolResult(result=result, summary=summary)

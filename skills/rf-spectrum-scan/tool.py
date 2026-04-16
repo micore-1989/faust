@@ -3,7 +3,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from faust.skills.fakes import fake_capture_path, mark_synthetic, _rng
+from faust.skills.fakes import fake_capture_path, mark_synthetic, pack_summary, _rng
+from faust.tools.registry import ToolResult
 
 
 # Known strong emitters by frequency band.
@@ -17,7 +18,7 @@ _KNOWN_PEAKS = {
 }
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     start_mhz = float(args.get("start_mhz", 300))
     end_mhz = float(args.get("end_mhz", 2500))
     step_khz = int(args.get("step_khz", 500))
@@ -42,7 +43,7 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
 
     path = fake_capture_path(f"spectrum_{int(start_mhz)}_{int(end_mhz)}", "csv")
 
-    return mark_synthetic({
+    result = mark_synthetic({
         "start_mhz": start_mhz,
         "end_mhz": end_mhz,
         "step_khz": step_khz,
@@ -50,3 +51,18 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
         "peaks": peaks,
         "full_scan_file": path,
     })
+
+    strongest = max(peaks, key=lambda p: p["power_dbm"]) if peaks else None
+    # Flag sub-GHz peaks (likely decodable via subghz_decode).
+    subghz_peaks = [p for p in peaks if p["freq_mhz"] < 1000]
+    summary = pack_summary({
+        "peaks_count": len(peaks),
+        "subghz_peaks": len(subghz_peaks),
+        "strongest": (
+            {"freq_mhz": strongest["freq_mhz"],
+             "power_dbm": strongest["power_dbm"],
+             "likely_source": strongest["likely_source"]}
+            if strongest else None
+        ),
+    })
+    return ToolResult(result=result, summary=summary)

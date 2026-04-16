@@ -13,6 +13,7 @@ parameters_schema:
   required:
     - a
     - b
+typical_duration_s: 1
 sensitivity: passive
 allowed_tools:
   - add

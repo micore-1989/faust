@@ -4,15 +4,16 @@ from __future__ import annotations
 from typing import Any
 
 from faust.skills.fakes import (
-    fake_capture_path, fake_hash, ago_iso, mark_synthetic, _rng,
+    fake_capture_path, fake_hash, ago_iso, mark_synthetic, pack_summary, _rng,
 )
+from faust.tools.registry import ToolResult
 
 
 _FAKE_USERS = ["alice", "bob", "admin", "svc_backup", "jsmith", "mgarcia"]
 _FAKE_DOMAINS = ["CORP", "ACME", "INTERNAL"]
 
 
-def execute(args: dict[str, Any]) -> dict[str, Any]:
+def execute(args: dict[str, Any]) -> ToolResult:
     interface = args.get("interface", "wlan0")
     duration_s = int(args.get("duration_s", 300))
     protocols = args.get("protocols") or ["LLMNR", "NBT-NS", "mDNS"]
@@ -23,7 +24,7 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
     poisoned_queries = duration_s // 2 + rng.randint(0, duration_s)
 
     if analyze_mode:
-        return mark_synthetic({
+        result = mark_synthetic({
             "interface": interface,
             "duration_s": duration_s,
             "protocols": protocols,
@@ -32,6 +33,12 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "queries_observed": poisoned_queries,
             "hashes_captured": [],
         })
+        summary = pack_summary({
+            "analyze_mode": True,
+            "queries_observed": poisoned_queries,
+            "hashes_captured": 0,
+        })
+        return ToolResult(result=result, summary=summary)
 
     # Random chance of capturing 0-3 hashes.
     n_hashes = rng.choice([0, 0, 1, 1, 2, 3])
@@ -49,11 +56,20 @@ def execute(args: dict[str, Any]) -> dict[str, Any]:
             "hash": fake_hash(64, seed),
         })
 
-    return mark_synthetic({
+    log_file = fake_capture_path("responder", "log")
+    result = mark_synthetic({
         "interface": interface,
         "duration_s": duration_s,
         "protocols": protocols,
         "poisoned_queries": poisoned_queries,
         "hashes_captured": hashes,
-        "log_file": fake_capture_path("responder", "log"),
+        "log_file": log_file,
     })
+    summary = pack_summary({
+        "hashes_captured": len(hashes),
+        "unique_users": len({h["username"] for h in hashes}),
+        "hash_type": hashes[0]["hash_type"] if hashes else None,
+        "first_username": hashes[0]["username"] if hashes else None,
+        "log_file": log_file,
+    })
+    return ToolResult(result=result, summary=summary)
