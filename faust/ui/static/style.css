@@ -422,3 +422,157 @@ button {
 body.active {
   /* Reserved for ambient glow layer; intentionally empty in Stage 1. */
 }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 6 — shell scaffolding
+   (screen containers, power-off / boot screens, tab bar, top-bar
+   sub-elements, scope label. Intentionally minimal; Stages 7–11
+   fill screen contents.)
+   ────────────────────────────────────────────────────────────── */
+
+.screen {
+  width: 100vw;
+  overflow: hidden;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  width: 100vw;
+  min-height: 100vh;
+}
+
+.app-shell > #app {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.app-shell > #app > .screen {
+  height: 100%;
+  padding: var(--space-5, 24px);
+  color: var(--ink-secondary);
+}
+
+.screen--power-off,
+.screen--boot {
+  position: fixed;
+  inset: 0;
+  height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--bg-primary);
+  color: var(--ink-primary);
+}
+
+.power-on-btn {
+  font: 900 32px/1 'Jost';
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  padding: 32px 64px;
+  background: var(--accent-crimson);
+  color: var(--ink-primary);
+  border: none;
+  cursor: pointer;
+}
+.power-on-btn:active { background: var(--accent-active); }
+
+.boot-placeholder {
+  font: 500 18px/1.4 'JetBrains Mono';
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+
+/* Top-bar internals (the outer .top-bar is styled by §7.1). */
+.top-bar__left,
+.top-bar__right {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.top-bar__center {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+}
+
+.top-bar__brand {
+  padding: 12px 16px;
+  background: var(--ink-primary);
+  color: var(--bg-primary);
+  font: 900 16px/1 'Jost';
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.top-bar__mode {
+  padding: 12px 16px;
+  background: var(--accent-scholar);
+  color: var(--ink-primary);
+  font: 900 16px/1 'Jost';
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+body[data-mode="pact"] .top-bar__mode { background: var(--accent-crimson); }
+
+.scope-label {
+  background: transparent;
+  color: var(--ink-tertiary);
+  border: none;
+  cursor: pointer;
+  font: 500 14px/1.4 'Jost';
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+}
+.scope-label.scope-label--set { color: var(--accent-scope); }
+
+.top-bar__meta {
+  font: 400 10px/1.4 'JetBrains Mono';
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-secondary);
+}
+
+/* Tab bar — 4 evenly-split buttons along the bottom. */
+.tab-bar {
+  height: 88px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 0.5px solid var(--tile-border);
+  background: var(--bg-primary);
+}
+
+.tab {
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--ink-tertiary);
+  padding-top: 20px;
+  /* Leave room for the 3px active underline without shifting the label. */
+  border-bottom: 3px solid transparent;
+}
+.tab .ph { font-size: 24px; }
+.tab__label {
+  font: 700 11px/1.4 'Jost';
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.tab.tab--active {
+  color: var(--ink-primary);
+  border-bottom-color: var(--accent-crimson);
+}
+.tab:active { background: var(--bg-secondary); }
+
+/* Modal root — empty until a modal mounts (Stage 9). */
+#modal-root:empty { display: none; }

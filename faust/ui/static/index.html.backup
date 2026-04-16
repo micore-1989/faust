@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1280, height=800, initial-scale=1, user-scalable=no">
+    <title>𝑓aust</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="view-off">
+    <!-- Breathing glow — sits behind everything, color/opacity driven by classes on body -->
+    <div id="glow" aria-hidden="true"></div>
+
+    <!-- SPLASH: covers off → booting → post-boot reveal ─────────────── -->
+    <section class="view view-splash" data-view="splash">
+        <div class="splash-frame">
+            <!-- The wordmark: f is always present; 'aust' reveals at the end -->
+            <div class="splash-word" id="splash-word">
+                <span class="logo-f" id="logo-f">𝑓</span><span class="logo-aust" id="logo-aust">aust</span>
+            </div>
+            <div class="tagline" id="splash-tagline">AI-native pentesting handheld</div>
+            <div class="splash-cta" id="splash-cta">
+                <button id="power-on-btn" class="btn-primary">Power on</button>
+            </div>
+            <div class="boot-area" id="boot-area">
+                <div id="boot-log" class="boot-log"></div>
+                <div class="boot-bar"><div id="boot-progress" class="boot-bar-fill"></div></div>
+            </div>
+            <div class="splash-quote" id="splash-quote"></div>
+        </div>
+    </section>
+
+    <!-- HOME ────────────────────────────────────────────────────────── -->
+    <section class="view view-home" data-view="home">
+        <header class="top-bar">
+            <div class="brand" id="brand">𝑓aust</div>
+            <div class="status-right">
+                <span class="status-chip" id="mephisto-chip">
+                    <span class="dot" id="mephisto-dot"></span>
+                    <span id="mephisto-label">mephisto</span>
+                </span>
+            </div>
+        </header>
+
+        <main class="home-grid" id="home-grid">
+            <!-- Populated by JS: category tiles + AI tile -->
+        </main>
+
+        <footer class="bottom-bar">
+            <button id="mephisto-toggle" class="btn-ghost">
+                <span class="dot-inline" id="mephisto-toggle-dot"></span>
+                <span class="toggle-label" id="mephisto-toggle-label">Connect Ψ</span>
+            </button>
+            <div class="spacer"></div>
+            <button id="power-off-btn" class="btn-icon btn-red-outline" title="Power off">⏻</button>
+        </footer>
+    </section>
+
+    <!-- CATEGORY (list of skills in a chosen category) ──────────────── -->
+    <section class="view view-category" data-view="category">
+        <header class="top-bar">
+            <button class="back-btn" data-back>←</button>
+            <div class="title" id="category-title">Category</div>
+            <div class="status-right"></div>
+        </header>
+        <main class="skill-list" id="skill-list"></main>
+    </section>
+
+    <!-- SKILL (detail + parameter form + run) ───────────────────────── -->
+    <section class="view view-skill" data-view="skill">
+        <header class="top-bar">
+            <button class="back-btn" data-back>←</button>
+            <div class="title" id="skill-title">skill</div>
+            <div class="status-right">
+                <span class="sensitivity-pill" id="skill-sensitivity">passive</span>
+            </div>
+        </header>
+        <main class="skill-detail">
+            <p class="skill-description" id="skill-description"></p>
+            <form class="params-form" id="skill-form" autocomplete="off"></form>
+            <div class="skill-result" id="skill-result"></div>
+        </main>
+        <footer class="bottom-bar">
+            <div class="spacer"></div>
+            <button id="skill-run-btn" class="btn-primary">Run</button>
+        </footer>
+    </section>
+
+    <!-- CHAT (Ask 𝑓aust) ────────────────────────────────────────────── -->
+    <section class="view view-chat" data-view="chat">
+        <header class="top-bar">
+            <button class="back-btn" data-back>←</button>
+            <div class="title">Ask 𝑓aust</div>
+            <div class="status-right">
+                <span class="status-chip" id="chat-mephisto-chip">
+                    <span class="dot" id="chat-mephisto-dot"></span>
+                    <span id="chat-mephisto-label">mephisto</span>
+                </span>
+            </div>
+        </header>
+        <main class="chat-messages" id="chat-messages">
+            <div class="chat-empty" id="chat-empty">Dock Mephisto to begin. The AI will plan and execute skills through Faust.</div>
+        </main>
+        <footer class="chat-input-bar">
+            <input type="text" id="chat-input" placeholder="Ask anything…" autocomplete="off" disabled>
+            <button id="chat-send" class="btn-primary" disabled>Send</button>
+        </footer>
+    </section>
+
+    <!-- Confirmation / plan-approval overlay (shared modal) ─────────── -->
+    <div id="modal" class="modal">
+        <div class="modal-card">
+            <div class="modal-title" id="modal-title"></div>
+            <div class="modal-body" id="modal-body"></div>
+            <div class="modal-actions">
+                <button class="btn-ghost" id="modal-reject">Cancel</button>
+                <button class="btn-primary" id="modal-approve">Approve</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
