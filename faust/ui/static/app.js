@@ -44,6 +44,38 @@
     threshold: 5,
   };
 
+  // ── Goethe quote pool (spec §10.1.1) ─────────────────────────
+  const GOETHE_LINES = [
+    { de: "Grau, teurer Freund, ist alle Theorie.",
+      en: "GREY, DEAR FRIEND, IS ALL THEORY" },
+    { de: "Zwei Seelen wohnen, ach! in meiner Brust.",
+      en: "TWO SOULS DWELL, ALAS, IN MY BREAST" },
+    { de: "Der Worte sind genug gewechselt, laßt mich auch endlich Taten sehn!",
+      en: "ENOUGH WORDS HAVE BEEN EXCHANGED; NOW LET ME SEE DEEDS" },
+    { de: "Das Werdende, das ewig wirkt und lebt.",
+      en: "THE BECOMING, THAT FOREVER ACTS AND LIVES" },
+  ];
+
+  function pickGoetheLine() {
+    const lastIndex = parseInt(localStorage.getItem("faustBootQuote") ?? "-1", 10);
+    let next;
+    do {
+      next = Math.floor(Math.random() * GOETHE_LINES.length);
+    } while (GOETHE_LINES.length > 1 && next === lastIndex);
+    localStorage.setItem("faustBootQuote", String(next));
+    return GOETHE_LINES[next];
+  }
+
+  // ── Boot-screen session flags ────────────────────────────────
+  // hasReceivedInitialState distinguishes fresh page load (first state msg)
+  // from live transitions. bootAnimationInProgress prevents double-trigger
+  // if a second `state{power:on}` arrives during the fade-out window.
+  // bootSessionQuote caches the current boot's Goethe pick so repeated
+  // renders don't flicker the line.
+  let hasReceivedInitialState = false;
+  let bootAnimationInProgress = false;
+  let bootSessionQuote = null;
+
   // ── State (spec §11.1) ───────────────────────────────────────
   const state = {
     power: "off",                    // off | booting | on
@@ -121,8 +153,7 @@
         break;
 
       case "boot_log":
-        // Stage 7 renders these; for now just log.
-        console.log("[boot]", msg.line);
+        appendBootLogLine(msg.line ?? "");
         break;
 
       // ── Agent phase markers (Stage 10 renders) ──
@@ -193,9 +224,117 @@
     render();
   }
 
+  // ── Boot-screen helpers (spec §10.1) ─────────────────────────
+
+  function initBootScreen() {
+    // Rebuilds the boot-screen DOM, picks a fresh Goethe line, and
+    // clears any stale animation state. Called when power enters the
+    // booting state — either as a live transition or as the initial
+    // state message from a page load that happened mid-boot.
+    bootAnimationInProgress = false;
+    bootScreen.classList.remove("boot-fading");
+
+    const quote = pickGoetheLine();
+    bootSessionQuote = quote;
+
+    bootScreen.innerHTML = "";
+
+    const layout = document.createElement("div");
+    layout.className = "boot-layout";
+
+    const img = document.createElement("img");
+    img.className = "boot-splash";
+    img.src = "/assets/illustrations/boot-splash.png";
+    img.alt = "";
+    layout.appendChild(img);
+
+    const wordmark = document.createElement("h1");
+    wordmark.className = "boot-wordmark type-wordmark-xl";
+    wordmark.textContent = "FAUST";
+    layout.appendChild(wordmark);
+
+    const quoteBox = document.createElement("div");
+    quoteBox.className = "boot-quote";
+    const de = document.createElement("div");
+    de.className = "boot-quote__de";
+    de.textContent = quote.de;
+    const en = document.createElement("div");
+    en.className = "boot-quote__en";
+    en.textContent = quote.en;
+    quoteBox.appendChild(de);
+    quoteBox.appendChild(en);
+    layout.appendChild(quoteBox);
+
+    const log = document.createElement("pre");
+    log.className = "boot-log";
+    log.id = "boot-log";
+    layout.appendChild(log);
+
+    bootScreen.appendChild(layout);
+  }
+
+  function resetBootScreen() {
+    bootAnimationInProgress = false;
+    bootSessionQuote = null;
+    bootScreen.classList.remove("boot-fading");
+  }
+
+  function appendBootLogLine(line) {
+    const bootLogEl = document.getElementById("boot-log");
+    if (!bootLogEl) return;
+
+    const lineEl = document.createElement("span");
+    lineEl.className = "boot-log__line";
+
+    const match = line.match(/^(\[\s*(ok|fail|warn)\s*\])(.*)$/i);
+    if (match) {
+      const prefix = match[1];
+      const status = match[2].toLowerCase();
+      const rest = match[3];
+
+      const prefixSpan = document.createElement("span");
+      prefixSpan.className = `boot-log__prefix boot-log__prefix--${status}`;
+      prefixSpan.textContent = prefix;
+      lineEl.appendChild(prefixSpan);
+
+      const contentSpan = document.createElement("span");
+      contentSpan.className = "boot-log__content" + (status === "fail" ? " boot-log__content--fail" : "");
+      contentSpan.textContent = rest;
+      lineEl.appendChild(contentSpan);
+    } else {
+      lineEl.textContent = line;
+    }
+
+    bootLogEl.appendChild(lineEl);
+    bootLogEl.appendChild(document.createTextNode("\n"));
+    bootLogEl.scrollTop = bootLogEl.scrollHeight;
+  }
+
+  function startBootCompletionAnimation() {
+    if (bootAnimationInProgress) return;
+    bootAnimationInProgress = true;
+
+    const wordmark = bootScreen.querySelector(".boot-wordmark");
+    if (wordmark) {
+      wordmark.classList.add("boot-wordmark--bright");
+      setTimeout(() => wordmark.classList.remove("boot-wordmark--bright"), 300);
+    }
+
+    setTimeout(() => {
+      bootScreen.classList.add("boot-fading");
+    }, 600);
+
+    setTimeout(() => {
+      bootAnimationInProgress = false;
+      render();
+    }, 1100);
+  }
+
   // ── applyServerState: merge server state 1:1 into local state ─
   // Shape matches faust/ui/state.py SimulatorState.to_dict() as of Stage 4.
   function applyServerState(msg) {
+    const prevPower = state.power;
+
     if (typeof msg.power !== "undefined") state.power = msg.power;
     if (typeof msg.mephisto !== "undefined") state.mephisto = msg.mephisto;
     if (typeof msg.boot_progress !== "undefined") state.boot_progress = msg.boot_progress;
@@ -204,6 +343,29 @@
     if (msg.scope) state.scope = msg.scope;
     if (Array.isArray(msg.active_pursuits)) state.active_pursuits = msg.active_pursuits;
     state.mode = state.mephisto === "connected" ? "pact" : "scholar";
+
+    // Boot transition detection (spec §10.1).
+    if (!hasReceivedInitialState) {
+      // First state message of the JS session. Do NOT play the
+      // booting→on animation, even if we arrived mid-boot: the boot
+      // screen is shown as-is, and the eventual `on` transition will
+      // trigger the animation chain normally.
+      hasReceivedInitialState = true;
+      if (state.power === "booting") {
+        initBootScreen();
+      }
+      return;
+    }
+
+    if (msg.power !== undefined && msg.power !== prevPower) {
+      if (state.power === "booting") {
+        initBootScreen();
+      } else if (state.power === "on" && prevPower === "booting") {
+        startBootCompletionAnimation();
+      } else if (state.power === "off") {
+        resetBootScreen();
+      }
+    }
   }
 
   // ── View stack (spec §11.4) ──────────────────────────────────
@@ -245,11 +407,18 @@
     const isBooting = state.power === "booting";
     const isOn = state.power === "on";
 
-    powerOffScreen.classList.toggle("hidden", !isOff);
-    bootScreen.classList.toggle("hidden", !isBooting);
-    appShell.classList.toggle("hidden", !isOn);
+    // During the boot-completion animation window (power already === "on"
+    // but the fade-out hasn't finished), keep the boot screen visible and
+    // the app shell hidden. The animation chain flips the flag after
+    // 1100ms and re-invokes render() to finalize.
+    const showBoot = isBooting || (isOn && bootAnimationInProgress);
+    const showApp = isOn && !bootAnimationInProgress;
 
-    if (isOn) {
+    powerOffScreen.classList.toggle("hidden", !isOff);
+    bootScreen.classList.toggle("hidden", !showBoot);
+    appShell.classList.toggle("hidden", !showApp);
+
+    if (showApp) {
       // Show exactly one inner screen.
       const screens = appShell.querySelectorAll("#app > .screen[data-view]");
       screens.forEach((el) => {

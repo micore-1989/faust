@@ -576,3 +576,62 @@ body[data-mode="pact"] .top-bar__mode { background: var(--accent-crimson); }
 
 /* Modal root — empty until a modal mounts (Stage 9). */
 #modal-root:empty { display: none; }
+
+/* ──────────────────────────────────────────────────────────────
+   Stage 7 — boot sequence (spec §10.1)
+   ────────────────────────────────────────────────────────────── */
+
+.boot-layout {
+  display: flex; flex-direction: column; align-items: center;
+  padding-top: 40px; width: 100%; height: 100vh;
+  background: var(--bg-primary); overflow: hidden;
+}
+.boot-splash {
+  width: 480px; height: auto; display: block;
+  margin-bottom: 40px;
+}
+.boot-wordmark {
+  color: var(--ink-primary);
+  margin: 0 0 24px;
+  transition: filter 600ms ease-in-out;
+}
+.boot-wordmark.boot-wordmark--bright {
+  filter: brightness(1.1);
+}
+.boot-quote {
+  text-align: center; margin-bottom: 32px;
+}
+.boot-quote__de {
+  font: 500 18px/1.3 'Jost';
+  letter-spacing: 0.02em;
+  color: var(--accent-scope);
+  margin-bottom: 8px;
+}
+.boot-quote__en {
+  font: 400 10px/1.4 'JetBrains Mono';
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-tertiary);
+}
+.boot-log {
+  width: 400px; max-height: 240px;
+  overflow-y: auto; overflow-x: hidden;
+  margin: 0; padding: 0;
+  font: 400 12px/1.6 'JetBrains Mono';
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
+}
+.boot-log__line { display: block; }
+.boot-log__prefix { display: inline-block; width: 5ch; }
+.boot-log__prefix--ok   { color: var(--accent-success); }
+.boot-log__prefix--fail { color: var(--accent-crimson); }
+.boot-log__prefix--warn { color: var(--accent-scope); }
+.boot-log__content--fail { color: var(--ink-primary); }
+
+/* Screen crossfade from boot to app-shell. */
+#boot-screen, #app-shell {
+  transition: opacity 500ms ease-in-out;
+}
+#boot-screen.boot-fading {
+  opacity: 0; pointer-events: none;
+}
