@@ -133,8 +133,9 @@
     currentTab: "dashboard",
     currentViewParams: {},
     viewStack: [],
-    conversation: [],                // used by Stage 10
-    currentToolCall: null,           // used by Stage 10
+    conversation: [],                // Stage 10 — chat entries {key, role, content, variant?}
+    currentToolCall: null,           // Stage 8 dashboard radio-tile marker
+    toolPane: null,                  // Stage 10 Mephisto tool-output pane {name, args, output}
     active: false,                   // body.active hook
   };
 
@@ -200,32 +201,54 @@
         appendBootLogLine(msg.line ?? "");
         break;
 
-      // ── Agent phase markers (Stage 10 renders) ──
+      // ── Agent phase markers (spec §10.7 / §17.5) ──
       case "planning_started":
-      case "parameterizing_step":
-      case "thinking":
+        handlePlanningStarted(msg);
         break;
 
-      // ── Agent tool / plan events (Stage 10 renders plans) ──
+      case "parameterizing_step":
+        handleParameterizingStep(msg);
+        break;
+
+      case "thinking":
+        // No Stage 10 rendering — phase markers + tool output cover
+        // the user-visible "model is thinking" story. Streaming thinking
+        // text would flood the conversation pane in long plans.
+        break;
+
+      // ── Agent tool / plan events ──
       case "plan_proposed":
+        // The plan has arrived; the planning/replan intervals should stop
+        // ticking. The plan-approval modal will surface the actual plan.
+        clearPlanPhaseIntervals();
         break;
 
       case "tool_call_proposed":
-        // Track the in-flight call so the radio-tile for its category
-        // can render in the "active" state (sigil spec §4.2).
+        // Stage 8: dashboard radio-tile active marker.
         state.currentToolCall = {
           call_id: msg.call_id,
           name: msg.tool_name,
           args: msg.arguments || {},
         };
+        // Stage 10: tool-output pane header + chat entry.
+        if (toolPaneClearTimer) { clearTimeout(toolPaneClearTimer); toolPaneClearTimer = null; }
+        state.toolPane = {
+          name: msg.tool_name,
+          args: msg.arguments || {},
+          output: [],
+        };
+        addOrUpdateConversation({
+          key: "tool-" + (msg.call_id || msg.tool_name),
+          role: "tool",
+          content: formatToolCall(msg.tool_name, msg.arguments || {}),
+        });
         markViewDirty();
+        renderConversation();
+        renderToolOutput();
         break;
 
       case "tool_call_executed":
-        // Mid-plan executions are NOT terminal — a multi-step plan emits
-        // several of these before `final`. Do not release body.active here;
-        // the release happens on `final`. Stage 8 uses the event only to
-        // clear the per-tile "active" marker when the current call completes.
+        // Stage 8: clear dashboard active marker when this call finishes.
         if (state.currentToolCall) {
           const matchesId = msg.call_id && state.currentToolCall.call_id === msg.call_id;
           const matchesName = !msg.call_id && state.currentToolCall.name === msg.tool_name;
@@ -234,11 +257,45 @@
             markViewDirty();
           }
         }
+        // Stage 10: append to tool-pane output + chat entry; schedule the
+        // pane clear 3 s later so the operator can actually read the result.
+        if (state.toolPane) {
+          if (msg.error) {
+            state.toolPane.output.push({ kind: "error", text: "✗ " + msg.error });
+          } else {
+            state.toolPane.output.push({
+              kind: "success",
+              text: "✓ " + truncateJson(msg.result, 500),
+            });
+          }
+        }
+        if (toolPaneClearTimer) clearTimeout(toolPaneClearTimer);
+        toolPaneClearTimer = setTimeout(() => {
+          state.toolPane = null;
+          toolPaneClearTimer = null;
+          renderToolOutput();
+        }, 3000);
+        addOrUpdateConversation({
+          key: "result-" + (msg.call_id || msg.tool_name),
+          role: "result",
+          content: msg.error ? String(msg.error) : truncateJson(msg.result, 200),
+        });
+        renderConversation();
+        renderToolOutput();
         break;
 
       case "final":
         setActive(false);
         state.currentToolCall = null;
+        clearAllPhaseIntervals();
+        if (msg.text) {
+          addOrUpdateConversation({
+            key: "meph-" + Date.now(),
+            role: "mephisto",
+            content: msg.text,
+          });
+          renderConversation();
+        }
         markViewDirty();
         break;
 
@@ -248,6 +305,8 @@
         break;
 
       case "plan_approval_request":
+        // Plan is ready to review — stop the planning counter.
+        clearPlanPhaseIntervals();
         enqueueOrOpenModal({ type: "plan", msg });
         break;
 
@@ -935,6 +994,8 @@
       renderToolGroup(screen);
     } else if (view === "parameter-form") {
       renderParameterForm(screen);
+    } else if (view === "mephisto") {
+      renderMephisto(screen);
     }
     // If the next render lands on a different screen, we want to start
     // fresh. `builtFor` tracks the parameter-form case where we also
@@ -999,6 +1060,42 @@
         resetBootScreen();
       }
     }
+
+    // Mephisto dock transitions (Stage 10, spec §3.4 / §10.12 / §10.13).
+    // `document.body.dataset.mode` and the top-bar mode-label are driven
+    // by render() from state.mode, so the palette swap runs automatically
+    // via the Stage 1 global transition rules. We only need to handle the
+    // discrete side-effects here: ceremony on first dock, auto-navigate
+    // off the Mephisto screen on undock.
+    if (state.mephisto !== prevMephisto) {
+      if (state.mephisto === "connected" && prevMephisto === "disconnected") {
+        if (state.first_dock_this_boot === true) {
+          setTimeout(showFirstDockCeremony, 600);
+        }
+      } else if (state.mephisto === "disconnected" && prevMephisto === "connected") {
+        if (state.currentView === "mephisto") {
+          state.currentView = "dashboard";
+          state.currentTab = "dashboard";
+          state.viewStack = [];
+          markViewDirty();
+        }
+      }
+    }
+
+    // Scope change lands in the conversation as a SCOPE entry so the
+    // operator's chat history reflects every scope flip (spec §10.7).
+    // Skip the initial state hydration so we don't log the starting
+    // scope as a change.
+    const scopeChanged = JSON.stringify(state.scope) !== prevScope;
+    if (scopeChanged) {
+      const sc = formatScopeLine(state.scope);
+      addOrUpdateConversation({
+        key: "scope-" + Date.now(),
+        role: "scope",
+        content: `Scope now: ${sc.name}${sc.extra}`,
+      });
+      renderConversation();
+    }
   }
 
   // ── View stack (spec §11.4) ──────────────────────────────────
@@ -1019,6 +1116,362 @@
     markViewDirty();
     render();
   }
+
+  // ── Stage 10 — Mephisto conversation + dock (spec §10.7 / §10.12 / §10.13) ─
+
+  // Phase-marker book-keeping. Every active planning / parameterizing
+  // phase owns exactly one chat entry (by stable key) plus an interval
+  // that ticks the elapsed-seconds counter in its content field. Both
+  // the interval id and the phase start time are kept module-local so
+  // that a final / plan_proposed / plan_approval_request can quiesce
+  // them without reaching into the DOM.
+  const phaseIntervals = new Map();   // key → interval id
+  const phaseStartTimes = new Map();  // key → Date.now()
+
+  // Scheduled tool-pane clear. On tool_call_executed we append the
+  // result line but wait 3 s before blanking the pane so the operator
+  // has a chance to actually read it. If a new tool_call_proposed
+  // arrives inside the window we cancel the timer.
+  let toolPaneClearTimer = null;
+
+  function addOrUpdateConversation({ key, role, content, variant }) {
+    const idx = state.conversation.findIndex((e) => e.key === key);
+    if (idx >= 0) {
+      state.conversation[idx].content = content;
+      if (role) state.conversation[idx].role = role;
+      if (variant !== undefined) state.conversation[idx].variant = variant;
+    } else {
+      state.conversation.push({
+        key,
+        role,
+        content,
+        variant: variant || null,
+        timestamp: Date.now(),
+      });
+    }
+  }
+
+  function startPhaseMarker(key, role, renderContent, variant) {
+    phaseStartTimes.set(key, Date.now());
+    if (phaseIntervals.has(key)) {
+      clearInterval(phaseIntervals.get(key));
+      phaseIntervals.delete(key);
+    }
+    const tick = () => {
+      const start = phaseStartTimes.get(key);
+      if (!start) return;
+      const seconds = Math.floor((Date.now() - start) / 1000);
+      addOrUpdateConversation({
+        key,
+        role,
+        content: renderContent(seconds),
+        variant,
+      });
+      renderConversation();
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    phaseIntervals.set(key, id);
+  }
+
+  function clearPhaseInterval(key) {
+    const id = phaseIntervals.get(key);
+    if (id !== undefined) {
+      clearInterval(id);
+      phaseIntervals.delete(key);
+    }
+    phaseStartTimes.delete(key);
+  }
+
+  function clearAllPhaseIntervals() {
+    for (const id of phaseIntervals.values()) clearInterval(id);
+    phaseIntervals.clear();
+    phaseStartTimes.clear();
+  }
+
+  function clearPlanPhaseIntervals() {
+    for (const key of [...phaseIntervals.keys()]) {
+      if (
+        key === "phase-catalog" ||
+        key === "phase-plan" ||
+        key.startsWith("phase-replan-")
+      ) clearPhaseInterval(key);
+    }
+  }
+
+  function handlePlanningStarted(msg) {
+    const attempt = msg.attempt || 0;
+    if (msg.phase === "catalog") {
+      clearPhaseInterval("phase-catalog");
+      startPhaseMarker(
+        "phase-catalog",
+        "planning",
+        (s) => `assembling catalog (${s}s)`,
+      );
+    } else if (msg.phase === "plan") {
+      clearPhaseInterval("phase-catalog");
+      startPhaseMarker(
+        "phase-plan",
+        "planning",
+        (s) => `thinking about steps (${s}s)`,
+      );
+    } else if (msg.phase === "replan") {
+      clearPhaseInterval("phase-catalog");
+      clearPhaseInterval("phase-plan");
+      const key = `phase-replan-${attempt || 1}`;
+      startPhaseMarker(
+        key,
+        "planning",
+        (s) => `RE-PLANNING · adjusting course (${s}s)`,
+        "replan",
+      );
+    }
+  }
+
+  function handleParameterizingStep(msg) {
+    // Single rolling entry — one visible row per turn, step number
+    // updates in place as parameterization walks through the plan.
+    addOrUpdateConversation({
+      key: "phase-param",
+      role: "parameterizing",
+      content: `step ${msg.step} of ${msg.of} · ${msg.skill}`,
+    });
+    renderConversation();
+  }
+
+  function truncateJson(value, max) {
+    if (value == null) return "";
+    let s;
+    try { s = JSON.stringify(value); } catch { s = String(value); }
+    if (s.length > max) s = s.slice(0, max - 1) + "…";
+    return s;
+  }
+
+  // ── Conversation + tool-output renderers ─────────────────────
+
+  function renderConversation() {
+    const container = document.querySelector(".mephisto-conversation");
+    if (!container) return;
+    container.innerHTML = "";
+    for (const entry of state.conversation) {
+      const el = document.createElement("div");
+      el.className = `chat-entry chat-entry--${entry.role}`;
+      if (entry.variant === "replan") el.classList.add("phase-marker--replan");
+      el.dataset.key = entry.key;
+
+      const roleEl = document.createElement("div");
+      roleEl.className = "chat-entry__role";
+      roleEl.textContent = entry.role === "planning" && entry.variant === "replan"
+        ? "RE-PLANNING"
+        : entry.role.toUpperCase();
+      el.appendChild(roleEl);
+
+      const contentEl = document.createElement("div");
+      contentEl.className = "chat-entry__content";
+      contentEl.textContent = entry.content;
+      el.appendChild(contentEl);
+
+      container.appendChild(el);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  function renderToolOutput() {
+    const container = document.querySelector(".mephisto-tool-output");
+    if (!container) return;
+    container.innerHTML = "";
+    if (!state.toolPane) {
+      const empty = document.createElement("div");
+      empty.className = "mephisto-tool-output__empty";
+      empty.textContent = "No active tool invocation.";
+      container.appendChild(empty);
+      return;
+    }
+    const header = document.createElement("div");
+    header.className = "mephisto-tool-output__header";
+    header.textContent = formatToolCall(state.toolPane.name, state.toolPane.args);
+    container.appendChild(header);
+    for (const line of state.toolPane.output) {
+      const row = document.createElement("div");
+      row.className = "mephisto-tool-output__line mephisto-tool-output__line--" + line.kind;
+      row.textContent = line.text;
+      container.appendChild(row);
+    }
+    container.scrollTop = container.scrollHeight;
+  }
+
+  // ── Mephisto screen builder ──────────────────────────────────
+
+  function renderMephisto(screen) {
+    // Scholar mode is not a valid state for this screen — the dock
+    // transition auto-navigates away, but a stale pushView or dev-tools
+    // edit could still land here. Render a helpful lock message.
+    if (state.mode !== "pact") {
+      screen.innerHTML = "";
+      screen.removeAttribute("data-builtFor");
+      const lock = document.createElement("div");
+      lock.className = "mephisto-screen__locked";
+      lock.textContent = "Dock Mephisto to begin.";
+      screen.appendChild(lock);
+      return;
+    }
+
+    // Build the shell once per visit. Subsequent dirty renders only
+    // refresh the conversation + tool-output panes (renderConversation
+    // / renderToolOutput), so the input retains focus and typed text.
+    if (screen.dataset.builtFor === "mephisto") {
+      renderConversation();
+      renderToolOutput();
+      return;
+    }
+    screen.innerHTML = "";
+    screen.dataset.builtFor = "mephisto";
+
+    const wrap = document.createElement("div");
+    wrap.className = "mephisto-screen";
+
+    // Header: back + MEPHISTO wordmark + model line.
+    const header = document.createElement("div");
+    header.className = "mephisto-screen__header";
+
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "back-btn";
+    back.innerHTML = '<i class="ph ph-arrow-left"></i><span>BACK</span>';
+    back.addEventListener("click", () => goBack());
+    header.appendChild(back);
+
+    const brand = document.createElement("span");
+    brand.className = "mephisto-screen__brand";
+    brand.textContent = "MEPHISTO";
+    header.appendChild(brand);
+
+    const model = document.createElement("span");
+    model.className = "mephisto-screen__model";
+    model.textContent = "QWEN 2.5-VL-3B · 8.4 T/S";
+    header.appendChild(model);
+
+    wrap.appendChild(header);
+
+    // Conversation pane.
+    const convo = document.createElement("div");
+    convo.className = "mephisto-conversation";
+    wrap.appendChild(convo);
+
+    // Input row.
+    const inputRow = document.createElement("div");
+    inputRow.className = "mephisto-input-row";
+
+    const input = document.createElement("input");
+    input.type = "text";
+    input.className = "mephisto-input__text";
+    input.placeholder = "speak to Mephisto...";
+    input.autofocus = true;
+    inputRow.appendChild(input);
+
+    const sendBtn = document.createElement("button");
+    sendBtn.type = "button";
+    sendBtn.className = "mephisto-input__send btn-primary";
+    sendBtn.textContent = "SEND ⏎";
+    inputRow.appendChild(sendBtn);
+
+    const submit = () => {
+      const text = input.value.trim();
+      if (!text) return;
+      addOrUpdateConversation({
+        key: "op-" + Date.now(),
+        role: "operator",
+        content: text,
+      });
+      input.value = "";
+      send({ type: "prompt", text });
+      setActive(true);
+      renderConversation();
+    };
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        submit();
+      }
+    });
+    sendBtn.addEventListener("click", submit);
+
+    wrap.appendChild(inputRow);
+
+    // Tool-output pane.
+    const toolOut = document.createElement("div");
+    toolOut.className = "mephisto-tool-output";
+    wrap.appendChild(toolOut);
+
+    screen.appendChild(wrap);
+
+    renderConversation();
+    renderToolOutput();
+    // Autofocus only after the screen is in the DOM + visible.
+    setTimeout(() => input.focus(), 0);
+  }
+
+  // ── First-dock ceremony (spec §10.13) ────────────────────────
+
+  function showFirstDockCeremony() {
+    // If a prior ceremony is still mid-animation, let it finish rather
+    // than stacking overlays — the server only flips first_dock_this_boot
+    // once per boot anyway.
+    if (document.querySelector(".ceremony-overlay")) return;
+
+    const overlay = document.createElement("div");
+    overlay.className = "ceremony-overlay";
+
+    const content = document.createElement("div");
+    content.className = "ceremony-content";
+
+    const brand = document.createElement("h1");
+    brand.className = "type-wordmark-xl";
+    brand.textContent = "MEPHISTO";
+    content.appendChild(brand);
+
+    const rule = document.createElement("div");
+    rule.className = "rule-heavy";
+    content.appendChild(rule);
+
+    const pact = document.createElement("h2");
+    pact.className = "type-h1";
+    pact.textContent = "PACT ESTABLISHED";
+    content.appendChild(pact);
+
+    const diamond = document.createElement("div");
+    diamond.className = "ceremony-diamond";
+    diamond.textContent = "◇";
+    content.appendChild(diamond);
+
+    overlay.appendChild(content);
+    document.body.appendChild(overlay);
+
+    requestAnimationFrame(() => overlay.classList.add("ceremony-overlay--visible"));
+
+    // 400 ms fade-in → 2000 ms hold → 400 ms fade-out → remove
+    setTimeout(() => {
+      overlay.classList.remove("ceremony-overlay--visible");
+      overlay.classList.add("ceremony-overlay--fading");
+      setTimeout(() => overlay.remove(), 400);
+    }, 400 + 2000);
+  }
+
+  // ── Dev shortcut (spec §13) ──────────────────────────────────
+  //
+  // DEV ONLY — Ctrl+D simulates a Mephisto dock/undock by sending the
+  // same mephisto WS message the future USB detector would issue. The
+  // server owns the transition, so the ceremony, palette swap, mode
+  // label, and auto-navigate-on-undock behaviors all fall out of the
+  // regular applyServerState path.
+  document.addEventListener("keydown", (e) => {
+    if (e.ctrlKey && !e.shiftKey && !e.altKey && (e.key === "d" || e.key === "D")) {
+      e.preventDefault();
+      const action = state.mephisto === "connected" ? "disconnect" : "connect";
+      send({ type: "mephisto", action });
+    }
+  });
 
   // ── Stage 9 — modals (spec §7.10 / §10.8 / §10.9 / §10.10) ───
   //
