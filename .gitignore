@@ -61,3 +61,6 @@ build/
 # --- Claude Code internal state ---
 .claude/
 .dev-sim/
+
+# --- Personal notes (not for publication) ---
+personal-notes/
