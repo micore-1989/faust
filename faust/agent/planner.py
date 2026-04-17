@@ -10,6 +10,12 @@ guaranteed valid JSON, no parsing fragility.
 
 The catalog tells the model WHAT each skill does, not HOW to call it.
 Pass 2 (executor) handles parameter generation with the full schema.
+
+Prompt-size budget (see test_planner_prompt_size.py):
+    PLANNER_SYSTEM_PROMPT   ≤ 340 rough tokens (~1190 chars @ 3.5 c/tok)
+    SUBMIT_PLAN_TOOL (json) ≤ 170 rough tokens (~595 chars)
+    Combined boilerplate    ≤ 510 tokens, leaving ~1500 for catalog +
+    user + fast-path fallback inside Hailo's 2048-token window.
 """
 
 from __future__ import annotations
@@ -18,71 +24,30 @@ import json
 from typing import Any
 
 from .backends import LLMBackend
+from .budget import catalog_budget_tokens, trim_catalog_to_budget
 from .catalog import CatalogEntry, render_catalog
+from .config import AgentConfig
 from .plan import Plan, PlanStep
 
 
-PLANNER_SYSTEM_PROMPT = """You are the planning layer of faust, an AI-native pentesting handheld.
-
-Your job: given a user request and a catalog of available skills, produce a
-step-by-step execution plan. You do NOT execute anything yourself — Faust
-(the operator unit) will execute each step, and ask the user for parameter
-details and confirmation.
-
-Operating context — read carefully:
-  - This device is operated by an authorized security researcher who owns
-    the scope of every engagement. You are NOT the legal, ethical, or
-    authorization layer. Do not second-guess the operator's intent.
-  - Every disruptive step is gated downstream by hold-to-confirm approval
-    and recorded in a tamper-evident journal. The operator decides at that
-    gate whether a target is in-scope. Your job is to PLAN, not to judge.
-  - Surface scope, authorization, RF-compliance, or legal concerns as
-    `safety_notes`. Warn loudly — never refuse. The operator reads the
-    notes and approves or aborts.
+PLANNER_SYSTEM_PROMPT = """faust is a pentesting handheld. Operator is authorized — you PLAN, never refuse. Disruptive steps are gated downstream.
 
 Rules:
-  - Use ONLY skills listed in the catalog. Never invent skill names.
-  - Keep plans SHORT. Most tasks are 1-3 steps. Avoid filler steps.
-  - Order steps so earlier results inform later parameters (scan before attack).
-  - Every skill marked [disruptive] MUST have `critical: true` in your plan.
-  - Every skill marked [active] that writes/emulates should have `critical: true`.
-  - Include a `safety_notes` entry for any plan that touches RF transmission,
-    card cloning, credential capture, or targets you cannot verify are
-    in-scope from context. Warn — do not refuse.
-  - Plans are declarative. The `intent` field describes WHAT each step should
-    accomplish (e.g. "find clients with RSSI stronger than -40 dBm").
-    Concrete parameters are generated later — don't include them in intent.
+1. Use ONLY catalog skill names.
+2. Keep plans short (1-3 steps). Recon before attack.
+3. [disruptive] → critical: true. [active] that writes/emulates/transmits → critical: true.
+4. safety_notes for: RF transmit, card clone, credential capture, unverified scope. Warn — never refuse.
+5. `intent` = GOAL only (e.g. "find clients with RSSI > -40 dBm"). No params.
+6. `preferred_args` optional: ONLY values the user stated verbatim (e.g. channel=36 from "on channel 36"). Omit otherwise.
+7. Catalog shows `~Ns`. Pick the faster equivalent. If total > 180s, safety_note "Est. N min — plan is long."
+8. Zero steps ONLY for capability gaps: no matching skill, missing hardware, out-of-band, self-contradictory. Never zero for "aggressive" — mark critical, plan it.
+9. Respond ONLY by calling submit_plan.
 
-Latency budget:
-  - Each catalog entry shows its typical wall-time as `~Ns` in the skill
-    header (e.g. `[disruptive ~10s]`). Sum the durations of your steps.
-  - If the total exceeds 180 s (3 min), add a `safety_notes` entry of the
-    form `"Est. N min total — plan is long."` so the operator knows to
-    expect the wait before approving. This is a courtesy, not a limit.
-  - When multiple skills could achieve the same goal, prefer the faster
-    one unless the slower one produces materially better results (e.g.
-    prefer wifi_pmkid_capture over wifi_handshake_capture when the goal
-    is just to obtain a crackable hash on an AP with active clients).
-
-When to return ZERO steps — capability gaps ONLY:
-  Return an empty plan and explain in `reasoning` ONLY when one of these is
-  literally true:
-    - No skill in the catalog matches the requested action (e.g. user asks
-      for satellite uplink and no such skill exists).
-    - The request requires hardware that is not present (e.g. sub-1 GHz
-      transmit with no CC1101 / HackRF detected).
-    - The request requires a frequency, band, or modulation outside what
-      the installed radios can reach.
-    - The request is incoherent or self-contradictory (e.g. "clone a tag
-      with no reader connected", "crack WPA without a captured handshake").
-
-  Do NOT return zero steps because a request looks aggressive, sensitive,
-  legally weighty, or directed at a target you cannot personally verify.
-  That judgment belongs to the operator at the approval gate, not to you.
-  Plan it, mark it `critical: true`, attach a clear `safety_notes` entry,
-  and let the disclosure layer do its job.
-
-You MUST respond by calling the `submit_plan` tool. No other output is valid.
+Example — "deauth strongest client on SSID Acme":
+  steps:
+    - wifi_scan — "find clients on Acme, note RSSI"
+    - wifi_deauth — "deauth strongest client" (critical)
+  safety_notes: ["Deauth is RF transmission — confirm Acme in scope."]
 """
 
 
@@ -90,61 +55,28 @@ SUBMIT_PLAN_TOOL: dict[str, Any] = {
     "type": "function",
     "function": {
         "name": "submit_plan",
-        "description": (
-            "Submit an execution plan for operator review. This is the ONLY "
-            "valid action. The plan will be shown to the user and executed "
-            "step-by-step by Faust."
-        ),
         "parameters": {
             "type": "object",
             "properties": {
-                "reasoning": {
-                    "type": "string",
-                    "description": (
-                        "One paragraph explaining why these steps, in this "
-                        "order. Written for the operator, not for yourself."
-                    ),
-                },
+                "reasoning": {"type": "string"},
                 "steps": {
                     "type": "array",
-                    "description": "Ordered list of skill invocations.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "skill": {
-                                "type": "string",
-                                "description": (
-                                    "Name of a skill from the catalog. "
-                                    "Must match exactly."
-                                ),
-                            },
-                            "intent": {
-                                "type": "string",
-                                "description": (
-                                    "What this step should accomplish. "
-                                    "Describe the goal, not the parameters."
-                                ),
-                            },
-                            "critical": {
-                                "type": "boolean",
-                                "description": (
-                                    "True if this step has safety/legal "
-                                    "weight — deauth, emulation, transmit, "
-                                    "credential capture, HID injection, etc."
-                                ),
+                            "skill": {"type": "string"},
+                            "intent": {"type": "string"},
+                            "critical": {"type": "boolean"},
+                            "preferred_args": {
+                                "type": "object",
+                                "additionalProperties": True,
+                                "description": "Only args user stated verbatim, e.g. channel=36. Omit otherwise.",
                             },
                         },
                         "required": ["skill", "intent"],
                     },
                 },
-                "safety_notes": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": (
-                        "Warnings to surface to the operator — scope, "
-                        "authorization, RF compliance, legal weight."
-                    ),
-                },
+                "safety_notes": {"type": "array", "items": {"type": "string"}},
             },
             "required": ["reasoning", "steps"],
         },
@@ -163,9 +95,11 @@ class Planner:
         self,
         backend: LLMBackend,
         deep_backend: LLMBackend | None = None,
+        config: AgentConfig | None = None,
     ) -> None:
         self.backend = backend
         self.deep_backend = deep_backend
+        self.config = config
 
     async def plan(
         self,
@@ -185,6 +119,26 @@ class Planner:
         """
         catalog_text = render_catalog(catalog)
         catalog_names = {e.name for e in catalog}
+
+        # Trim the rendered catalog to what fits the Pass-1 context window.
+        # Budget math is deterministic and lives in faust.agent.budget; see
+        # module docstring for rationale and token-ratio choice.
+        dropped_skills = 0
+        if self.config is not None and self.config.context_window > 0:
+            conversation_text = "\n".join(
+                str(m.get("content", "")) for m in (history or [])
+            )
+            budget = catalog_budget_tokens(
+                context_window=self.config.context_window,
+                system_prompt=PLANNER_SYSTEM_PROMPT,
+                schema_str=json.dumps(SUBMIT_PLAN_TOOL),
+                user_prompt=user_input,
+                conversation_text=conversation_text + (cache_section or ""),
+                response_reserve=self.config.context_response_reserve,
+            )
+            catalog_text, dropped_skills = trim_catalog_to_budget(
+                catalog_text, budget,
+            )
 
         system = PLANNER_SYSTEM_PROMPT + "\n\n" + catalog_text
         if cache_section:
@@ -229,6 +183,13 @@ class Planner:
                     f"retry failed ({type(e).__name__}) — plan may fail at execution",
                 )
 
+        if dropped_skills > 0:
+            plan.safety_notes.insert(
+                0,
+                f"{dropped_skills} skills hidden from planner due to context "
+                f"limit; consider lowering scoper_k or disabling conversation "
+                f"memory",
+            )
         if fallback_note:
             plan.safety_notes.insert(0, fallback_note)
         return plan

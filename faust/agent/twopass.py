@@ -63,6 +63,7 @@ from .pivots import matching_suggestions
 from .plan import Plan, PlanStep
 from .planner import Planner
 from ..skills.scoper import SkillScoper
+from ..skills.scoper_routing import filter_by_prompt_categories
 
 
 # PlanApprover is like Approver but scopes to the plan as a whole.
@@ -83,20 +84,22 @@ results from earlier steps.
 
 Rules:
   - Call the provided tool exactly once. No freeform response.
-  - If earlier steps produced relevant data (MAC addresses, SSIDs, coordinates),
-    use those in your parameters — don't invent values.
-  - Prior step summaries often name the canonical target via opinion fields:
-      * `best_handshake_target` (from wifi_scan) → use as `bssid`
-      * `first_hash_file` (from pcap_inspect / capture skills) → use as
-        `hash_file` for crack steps
-      * `rogue_bssid` (from rogue_ap_detector) → target for counter-ops
-      * `attacker_mac` (from deauth_detector) → source to block / track
-    Cite these directly instead of parsing them out of the full result.
-  - If a required parameter cannot be determined from the summaries and the
-    tool schema shows no `default`, leave the field absent — the tool will
-    validate or error cleanly. Never invent MACs, IPs, hashes, or file paths.
-  - If a parameter has a `default` in the schema, you MAY omit it; the
-    registry will fill it. Only include it if you have a reason to override.
+  - Parameter priority, in order:
+      1. "Already-chosen args" (if present in the user message) — these are
+         values the operator stated literally. Include them in your tool call
+         unless the schema explicitly forbids the value.
+      2. Opinion fields from earlier-step summaries — canonical targets:
+           * `best_handshake_target` (from wifi_scan) → use as `bssid`
+           * `first_hash_file` (from pcap_inspect / capture skills) → use as
+             `hash_file` for crack steps
+           * `rogue_bssid` (from rogue_ap_detector) → target for counter-ops
+           * `attacker_mac` (from deauth_detector) → source to block / track
+         Cite these directly instead of parsing them out of the full result.
+      3. Schema defaults — if a parameter has a `default`, you MAY omit it;
+         the registry fills it. Include only if you have a reason to override.
+  - If a required parameter cannot be determined from the sources above and
+    has no default, leave it absent — the tool will validate or error
+    cleanly. Never invent MACs, IPs, hashes, or file paths.
 """
 
 
@@ -119,7 +122,7 @@ class TwoPassAgent:
         self.config = config
         self.scoper = scoper
         self.plan_approver = plan_approver or _auto_approve_plan
-        self.planner = Planner(backend, deep_backend=deep_backend)
+        self.planner = Planner(backend, deep_backend=deep_backend, config=config)
         # Session-lived short-TTL cache of successful skill summaries.
         # The planner sees a "Known recent results" section so follow-up
         # prompts can skip re-scanning.
@@ -138,9 +141,23 @@ class TwoPassAgent:
         Capped to config.conversation_memory_turns to protect token budget.
         """
         # ── Pass 1: build catalog, plan ─────────────────────────────
+        # Two-stage scope routing:
+        #   1. Keyword router narrows by radio domain (meta always survives).
+        #   2. If the narrowed pool already fits scoper_k, skip the embedding
+        #      stage entirely; otherwise rank with the scoper and intersect.
         allowed_names: list[str] | None = None
         if self.scoper is not None:
-            allowed_names = await self.scoper.top_k(user_input, k=self.config.scoper_k)
+            candidates = filter_by_prompt_categories(
+                self.scoper.all_skills(), user_input,
+            )
+            if len(candidates) <= self.config.scoper_k:
+                allowed_names = candidates
+            else:
+                ranked = await self.scoper.top_k(user_input, k=len(candidates))
+                candidate_set = set(candidates)
+                allowed_names = [n for n in ranked if n in candidate_set][
+                    : self.config.scoper_k
+                ]
 
         catalog = build_catalog(self.dispatcher.registry, allowed_names=allowed_names)
         yield CatalogBuildStarted(skill_count=len(catalog))
@@ -404,6 +421,18 @@ class TwoPassAgent:
         pending_hints: list[str] | None = None,
     ) -> dict[str, Any]:
         """Pass 2 LLM call — generate parameters for one step, given one schema."""
+        # Filter preferred_args to keys declared on the tool schema. Unknown
+        # keys (from a hallucinating planner) get dropped silently; known
+        # keys seed the call and win over empty parameterizer output.
+        schema_props: dict[str, Any] = (
+            tool_schema.get("function", {})
+            .get("parameters", {})
+            .get("properties", {})
+        )
+        seeded: dict[str, Any] = {
+            k: v for k, v in step.preferred_args.items() if k in schema_props
+        }
+
         history_summary = ""
         if step_results:
             lines = []
@@ -428,6 +457,12 @@ class TwoPassAgent:
             f"Original user request: {user_input}\n\n"
             f"Current step intent: {step.intent}\n"
         )
+        if seeded:
+            step_context += (
+                f"\nAlready-chosen args (from the user's literal phrasing — "
+                f"include these in your tool call unless the schema forbids "
+                f"it): {json.dumps(seeded, default=str)}\n"
+            )
         if history_summary:
             step_context += f"\nEarlier step results:\n{history_summary}\n"
         if pending_hints:
@@ -450,10 +485,15 @@ class TwoPassAgent:
             tools=[tool_schema],
         )
 
-        # The model should have called the tool. If it didn't, return empty args.
+        # Merge preferred seed with the parameterizer's explicit choices.
+        # Parameterizer wins on key conflict — it has step history the planner
+        # didn't and may override a literal value with something better.
         for tc in msg.tool_calls:
             if tc.name == step.skill:
-                return {"name": tc.name, "arguments": tc.arguments}
+                merged = {**seeded, **(tc.arguments or {})}
+                return {"name": tc.name, "arguments": merged}
 
-        # Fallback: empty args, let the tool validate or error.
-        return {"name": step.skill, "arguments": {}}
+        # Fallback: no tool_call emitted. Dispatch seeded args alone so the
+        # tool's schema validator produces a real missing-field error rather
+        # than swallowing the operator's literal values.
+        return {"name": step.skill, "arguments": seeded}

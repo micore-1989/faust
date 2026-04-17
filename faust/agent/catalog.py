@@ -8,6 +8,16 @@ Each skill becomes one compact entry: name + short description + category
 schema at a time.
 
 The catalog is deterministic: built from the ToolRegistry. No LLM involvement.
+
+Taxonomy: every skill maps to one of exactly seven dashboard sigil groups
+(see faust-sigil-spec.md §1): wifi_ble | sub_ghz | nfc | lf_rfid | ir |
+vision | meta. Categorization is a two-tier lookup — `_EXACT` pins every
+current skill explicitly, `_PREFIX` handles stem-based matches for future
+skills that follow the naming convention. Unknown skills fall through to
+`meta` (the journal/audit tile) rather than a new bucket.
+
+`_EXACT` and `_PREFIX` are module-level constants; import them when you need
+to mirror this taxonomy elsewhere (e.g. scoper routing).
 """
 
 from __future__ import annotations
@@ -17,86 +27,125 @@ from dataclasses import dataclass
 from ..tools.registry import Sensitivity, ToolRegistry
 
 
-# Category hints based on skill name prefixes. Used to group the catalog
-# for readability in Mephisto's context. Unknown skills go in "misc".
-_CATEGORY_PREFIXES: dict[str, str] = {
-    # Radio subsystems
-    "wifi_": "wifi",
-    "ble_": "ble",
-    "nfc_": "nfc",
-    "rfid_": "rfid",
-    "ir_": "ir",
-    "subghz_": "subghz",
-    "rf_": "rf",
-    "hid_": "usb",
+# Canonical order the dashboard renders sigils. build_catalog() sorts by
+# this so the planner sees skills in the same order the operator does.
+_CATEGORY_ORDER: list[str] = [
+    "wifi_ble", "nfc", "lf_rfid", "sub_ghz", "ir", "vision", "meta",
+]
 
-    # Network (IP-layer)
-    "nmap_": "network",
-    "arp_": "network",
-    "dns_": "network",
-    "http_": "network",
-    "responder_": "network",
 
-    # Offline analysis / cracking
-    "pcap_": "analysis",
-    "wpa_": "analysis",
-    "hash_": "analysis",
+# Every current skill (as of the skills/ directory at commit time). When a
+# name appears both here and via a _PREFIX match, _EXACT wins. Defense-style
+# skills route to the category whose hardware they drive — rogue_ap_detector
+# is WiFi, imsi_catcher_detector is sub-GHz, camera_ir_scan is vision, etc.
+_EXACT: dict[str, str] = {
+    # wifi_ble — WiFi radios
+    "wifi_scan": "wifi_ble",
+    "wifi_deauth": "wifi_ble",
+    "wifi_beacon_spam": "wifi_ble",
+    "wifi_channel_analyze": "wifi_ble",
+    "wifi_evil_portal": "wifi_ble",
+    "wifi_handshake_capture": "wifi_ble",
+    "wifi_karma": "wifi_ble",
+    "wifi_pmkid_capture": "wifi_ble",
+    "wardrive": "wifi_ble",
+    # wifi_ble — BLE radio (same antenna stack)
+    "ble_scan": "wifi_ble",
+    "ble_service_enum": "wifi_ble",
+    "ble_pair_bruteforce": "wifi_ble",
+    "ble_spam": "wifi_ble",
+    "ble_tracker_scan": "wifi_ble",
+    # wifi_ble — IP-layer skills (the WiFi radio gets you on a network)
+    "arp_scan": "wifi_ble",
+    "arp_spoof": "wifi_ble",
+    "dns_hijack": "wifi_ble",
+    "http_recon": "wifi_ble",
+    "nmap_scan": "wifi_ble",
+    "responder_poison": "wifi_ble",
+    "pcap_inspect": "wifi_ble",
+    "wpa_crack": "wifi_ble",
+    "hid_payload": "wifi_ble",
+    # wifi_ble — defense-flavored skills driven by WiFi/BLE radios
+    "deauth_detector": "wifi_ble",
+    "rogue_ap_detector": "wifi_ble",
+    "probe_request_monitor": "wifi_ble",
 
-    # Exact-match entries (no trailing underscore)
-    "wardrive": "wifi",
-    "deauth_detector": "defense",
-    "rogue_ap_detector": "defense",
-    "ble_tracker_scan": "defense",
-    "probe_request_monitor": "defense",
-    "imsi_catcher_detector": "defense",
-    "camera_ir_scan": "defense",
-    "spectrum_anomaly": "defense",
+    # sub_ghz — HackRF / CC1101 skills
+    "subghz_decode": "sub_ghz",
+    "subghz_replay": "sub_ghz",
+    "rf_spectrum_scan": "sub_ghz",
+    "spectrum_anomaly": "sub_ghz",
+    "imsi_catcher_detector": "sub_ghz",
+
+    # nfc — PN532 / 13.56 MHz
+    "nfc_read": "nfc",
+    "nfc_write": "nfc",
+    "nfc_emulate": "nfc",
+    "nfc_crack_mifare": "nfc",
+
+    # lf_rfid — 125 kHz T5577 / RDM6300
+    "rfid_clone": "lf_rfid",
+
+    # ir — TSOP / IR LED
+    "ir_capture": "ir",
+
+    # vision — picamera2 / ML image pipeline
+    "camera_ir_scan": "vision",
+
+    # meta — journaling, ID-lookup, test utilities
+    "hash_identify": "meta",
+    "add": "meta",
+    "echo": "meta",
 }
 
 
-# Remap the 11 raw categories into the 7 sigil groups the UI dashboard
-# renders (see faust-ui-spec.md §8.3, §16.2). One source of truth; the UI
-# always receives one of exactly seven category strings.
-SIGIL_GROUP_MAP: dict[str, str] = {
-    "wifi": "wifi_ble",
-    "ble": "wifi_ble",
-    "network": "wifi_ble",
-    "nfc": "nfc",
-    "rfid": "lf_rfid",
-    "subghz": "sub_ghz",
-    "rf": "sub_ghz",
-    "ir": "ir",
-    "vision": "vision",
-    "usb": "meta",
-    "analysis": "meta",
-    "defense": "meta",
+# Stem-prefix fallback for skills not in _EXACT. Checked in iteration order;
+# on Python 3.7+ that matches insertion order, so put more-specific prefixes
+# first if two would otherwise both match.
+_PREFIX: dict[str, str] = {
+    # wifi_ble
+    "wifi_":     "wifi_ble",
+    "ble_":      "wifi_ble",
+    "arp_":      "wifi_ble",
+    "dns_":      "wifi_ble",
+    "http_":     "wifi_ble",
+    "nmap_":     "wifi_ble",
+    "responder_": "wifi_ble",
+    "pcap_":     "wifi_ble",
+    "wpa_":      "wifi_ble",
+    "hid_":      "wifi_ble",
+    # nfc
+    "nfc_":      "nfc",
+    # lf_rfid
+    "rfid_":     "lf_rfid",
+    # sub_ghz
+    "subghz_":   "sub_ghz",
+    "rf_":       "sub_ghz",
+    "spectrum_": "sub_ghz",
+    # ir
+    "ir_":       "ir",
+    # vision
+    "camera_":   "vision",
+    "image_":    "vision",
+    "ocr_":      "vision",
+    # meta
+    "hash_":     "meta",
+    "journal_":  "meta",
 }
-
-
-def _raw_categorize(name: str) -> str:
-    """Original 11-category prefix/exact-match logic, plus vision detection.
-
-    Vision-based skills (picamera2-backed or camera/vision in the name) take
-    precedence over the prefix table so `camera_ir_scan` lands in `vision`
-    rather than `defense`."""
-    lower = name.lower()
-    if "camera" in lower or "vision" in lower:
-        return "vision"
-    # Exact-name matches win over prefix matches (e.g. `ble_tracker_scan`
-    # is defense, not ble, even though it starts with `ble_`).
-    if name in _CATEGORY_PREFIXES:
-        return _CATEGORY_PREFIXES[name]
-    for prefix, cat in _CATEGORY_PREFIXES.items():
-        if prefix.endswith("_") and name.startswith(prefix):
-            return cat
-    return "misc"
 
 
 def _categorize(name: str) -> str:
-    """Return one of the seven sigil groups. Everything unmapped falls to
-    `meta` so the dashboard never renders a dead tile."""
-    raw = _raw_categorize(name)
-    return SIGIL_GROUP_MAP.get(raw, "meta")
+    """Return one of the 7 sigil groups for `name`.
+
+    Priority: _EXACT → _PREFIX → `meta` fallback. Never returns any string
+    outside the 7 canonical groups.
+    """
+    if name in _EXACT:
+        return _EXACT[name]
+    for prefix, cat in _PREFIX.items():
+        if name.startswith(prefix):
+            return cat
+    return "meta"
 
 
 @dataclass
@@ -116,6 +165,10 @@ def build_catalog(
 
     If `allowed_names` is given (e.g. from the scoper), only those skills
     appear. Use this to further trim the planning context.
+
+    Sorted by the canonical sigil order (wifi_ble first, meta last), then
+    by skill name within each group — same order the operator sees on the
+    dashboard.
     """
     entries: list[CatalogEntry] = []
     for tool in registry.all():
@@ -128,8 +181,8 @@ def build_catalog(
             sensitivity=tool.sensitivity,
             typical_duration_s=tool.typical_duration_s,
         ))
-    # Sort by category then name for consistent presentation.
-    entries.sort(key=lambda e: (e.category, e.name))
+    cat_rank = {cat: i for i, cat in enumerate(_CATEGORY_ORDER)}
+    entries.sort(key=lambda e: (cat_rank.get(e.category, len(cat_rank)), e.name))
     return entries
 
 
@@ -140,12 +193,12 @@ def render_catalog(entries: list[CatalogEntry]) -> str:
 
         ## Available skills
 
-        ### wifi
-        - wifi_scan [passive]: Scan nearby WiFi networks and clients
-        - wifi_deauth [disruptive]: Deauthenticate a client from an AP
+        ### wifi_ble
+        - wifi_scan [passive ~15s]: Scan nearby WiFi networks and clients
+        - wifi_deauth [disruptive ~10s]: Deauthenticate a client from an AP
 
-        ### ble
-        - ble_scan [passive]: Enumerate nearby BLE devices
+        ### nfc
+        - nfc_read [passive ~5s]: Read a 13.56 MHz NFC tag
     """
     if not entries:
         return "## Available skills\n\n(none)"

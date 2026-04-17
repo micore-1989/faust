@@ -43,6 +43,10 @@ class AgentConfig:
     # Generation
     temperature: float = 0.2  # low for tool-use reliability
     max_tokens: int = 1024  # response budget; chunk 3 noted 2048 ctx on Hailo
+    # Full context window of the Pass-1 backend. 2048 matches Hailo's 10H NPU
+    # output of Qwen 2.5-VL 3B. Used by faust.agent.budget to trim the rendered
+    # catalog so the planner never overflows the window.
+    context_window: int = 2048
     # Reserve ~256 tokens for response on tight-context backends (Claude
     # Agent SDK pattern; prevents mid-reasoning truncation).
     context_response_reserve: int = 256
@@ -87,6 +91,7 @@ class AgentConfig:
             planning_endpoint=os.environ.get("FAUST_PLANNING_ENDPOINT", cls.planning_endpoint),
             planning_model=os.environ.get("FAUST_PLANNING_MODEL", cls.planning_model),
             planning_timeout_s=float(os.environ.get("FAUST_PLANNING_TIMEOUT_S", cls.planning_timeout_s)),
+            context_window=int(os.environ.get("FAUST_CONTEXT_WINDOW", cls.context_window)),
             scoper_enabled=_envbool("FAUST_SCOPER_ENABLED", cls.scoper_enabled),
             scoper_k=int(os.environ.get("FAUST_SCOPER_K", cls.scoper_k)),
             scoper_endpoint=os.environ.get("FAUST_SCOPER_ENDPOINT", cls.scoper_endpoint),

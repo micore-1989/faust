@@ -48,6 +48,7 @@ from .events import (
     Final,
 )
 from ..skills.scoper import SkillScoper
+from ..skills.scoper_routing import filter_by_prompt_categories
 
 
 DEFAULT_SYSTEM_PROMPT = """You are faust, an AI-native pentesting handheld.
@@ -102,8 +103,20 @@ class AgentLoop:
         # prompt. Keeps the tool-schema section of context manageable on
         # tight-window backends (Hailo 2048 tok). The registry still holds
         # every tool — dispatch is not restricted, only what the model sees.
+        #
+        # Two-stage routing: keyword router → embedding scoper.
         if self.scoper is not None:
-            relevant = set(await self.scoper.top_k(user_input, k=self.scoper_k))
+            candidates = filter_by_prompt_categories(
+                self.scoper.all_skills(), user_input,
+            )
+            if len(candidates) <= self.scoper_k:
+                relevant = set(candidates)
+            else:
+                ranked = await self.scoper.top_k(user_input, k=len(candidates))
+                candidate_set = set(candidates)
+                relevant = set(
+                    [n for n in ranked if n in candidate_set][: self.scoper_k]
+                )
             tool_schemas = [
                 t.to_openai_schema()
                 for t in self.dispatcher.registry.all()
